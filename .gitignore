@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Data & outputs — excluded entirely from git
+# Inputs (re-fetch from upstream sources):
+#   - OISST .nc files: NOAA OISST v2.1 AVHRR
+#   - PMEL TAO/TRITON tarballs: pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html
+#   - CPC weekly text files
+Input/*
+!Input/.gitkeep
+
+# Generated outputs (regenerable from Input/ via run_all.py)
+Output/SST/*
+Output/Subsurface/*
+!Output/SST/.gitkeep
+!Output/Subsurface/.gitkeep
+
+# Subsurface extraction work dir
+subsurface/pmel_data/
+
+# Notebook checkpoints
+.ipynb_checkpoints/

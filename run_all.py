@@ -12,14 +12,33 @@ import sys
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent
+
+
+def _venv_python() -> Path | None:
+    """Return path to the project's .venv interpreter if it exists, else None."""
+    if os.name == "nt":
+        p = ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        p = ROOT / ".venv" / "bin" / "python"
+    return p if p.exists() else None
+
+
+# Auto-bootstrap into .venv: if we're running under a different interpreter
+# (e.g., system Python via plain `python run_all.py`), re-exec ourselves with
+# the venv interpreter so dependencies in requirements.txt are guaranteed to
+# resolve. Skip when already inside the venv or when no venv exists.
+_VPY = _venv_python()
+if _VPY and Path(sys.executable).resolve() != _VPY.resolve():
+    print(f"[bootstrap] switching to venv interpreter: {_VPY}")
+    os.execv(str(_VPY), [str(_VPY), str(Path(__file__).resolve()), *sys.argv[1:]])
+
 # Force UTF-8 for our own prints; child scripts get PYTHONUTF8=1 via env below.
 try:
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 except Exception:
     pass
-
-ROOT = Path(__file__).resolve().parent
 
 PIPELINES = {
     "sst":        ROOT / "sst" / "run_pipeline.py",

@@ -25,13 +25,22 @@ def _venv_python() -> Path | None:
 
 
 # Auto-bootstrap into .venv: if we're running under a different interpreter
-# (e.g., system Python via plain `python run_all.py`), re-exec ourselves with
-# the venv interpreter so dependencies in requirements.txt are guaranteed to
-# resolve. Skip when already inside the venv or when no venv exists.
+# (e.g., system Python via plain `python run_all.py`), re-launch ourselves
+# with the venv interpreter so dependencies in requirements.txt are
+# guaranteed to resolve. Skip when already inside the venv or when no venv
+# exists.
+#
+# We use subprocess.run, not os.execv: on Windows, os.execv mishandles paths
+# containing spaces (e.g. "E:\El Nino\Code\..."), splitting the argv on the
+# space and producing a mangled second-arg path. subprocess.run quotes the
+# command line through CreateProcess and survives spaces correctly.
 _VPY = _venv_python()
 if _VPY and Path(sys.executable).resolve() != _VPY.resolve():
     print(f"[bootstrap] switching to venv interpreter: {_VPY}")
-    os.execv(str(_VPY), [str(_VPY), str(Path(__file__).resolve()), *sys.argv[1:]])
+    rc = subprocess.run(
+        [str(_VPY), str(Path(__file__).resolve()), *sys.argv[1:]]
+    ).returncode
+    sys.exit(rc)
 
 # Force UTF-8 for our own prints; child scripts get PYTHONUTF8=1 via env below.
 try:

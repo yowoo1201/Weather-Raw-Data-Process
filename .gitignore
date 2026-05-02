@@ -16,13 +16,18 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Data & outputs — excluded entirely from git
-# Inputs (re-fetch from upstream sources):
-#   - OISST .nc files: NOAA OISST v2.1 AVHRR
-#   - PMEL TAO/TRITON tarballs: pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html
-#   - CPC weekly text files
+# Data & outputs
+# Daily/weekly inputs are re-fetched from upstream each run and excluded:
+#   - OISST .nc files: NOAA OISST v2.1 AVHRR (daily)
+#   - PMEL TAO/TRITON `data.tar` (daily buoy snapshot)
+#   - CPC weekly text files (wksst9120.for.txt / rel_wksst9120.txt)
+# Static inputs (1991–2020 climatology, rarely changes) ARE committed:
+#   - nino_clim_daily_1991-2020.csv
+#   - data_p_clim_processed.tar.gz
 Input/*
 !Input/.gitkeep
+!Input/nino_clim_daily_1991-2020.csv
+!Input/data_p_clim_processed.tar.gz
 
 # Generated outputs (regenerable from Input/ via run_all.py)
 Output/SST/*

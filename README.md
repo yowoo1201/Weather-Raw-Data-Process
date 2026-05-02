@@ -100,17 +100,27 @@ pip install -r requirements.txt
 
 ### 6) 입력 데이터 배치 / Place input data
 
-`Input/` 폴더는 빈 상태로 깃에 올라가 있습니다. 다음 파일들을 직접 받아 넣어야 합니다:
-The `Input/` folder is empty in git. Fetch and place these manually:
+#### Static 데이터 — 깃에 포함됨 (clone 시 자동) / Static — included in git
 
-| 파일 / File | 출처 / Source |
+| 파일 / File | 비고 / Note |
 |---|---|
-| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 (<https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/>) |
-| `Input/nino_clim_daily_1991-2020.csv` | 사전 산출 / pre-computed (별도 setup) |
-| `Input/wksst9120.for.txt` | CPC `wksst9120.for` (<https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for>) |
-| `Input/rel_wksst9120.txt` | CPC relative SSTA |
-| `Input/data.tar` | PMEL TAO/TRITON `t<lat><n\|s><lon><e\|w>_dy.ascii.gz` 묶음 (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html>) |
-| `Input/data_p_clim_processed.tar.gz` | per-lon DOY climatology builder 산출 |
+| `Input/nino_clim_daily_1991-2020.csv` | 4-box × 365일 climatology (1991–2020 기준) |
+| `Input/data_p_clim_processed.tar.gz` | per-longitude DOY climatology tarball |
+
+이 둘은 1991–2020 reference 기간에 의존하는 고정값이라 거의 변경 없음 — clone하면 그대로 사용 가능.
+These are tied to the 1991–2020 reference period and rarely change — usable directly after clone.
+
+#### Daily/Weekly 데이터 — 직접 받아 넣을 것 / Daily/Weekly — fetch manually
+
+매 실행 전 최신 본을 다음 위치에 배치:
+Place fresh copies before each run:
+
+| 파일 / File | 출처 / Source | 갱신 주기 |
+|---|---|---|
+| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 (<https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/>) | 매일 |
+| `Input/wksst9120.for.txt` | CPC `wksst9120.for` (<https://www.cpc.ncep.noaa.gov/data/indices/wksst9120.for>) | 주간 |
+| `Input/rel_wksst9120.txt` | CPC relative SSTA | 주간 |
+| `Input/data.tar` | PMEL TAO/TRITON `t<lat><n\|s><lon><e\|w>_dy.ascii.gz` 묶음 (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html>) | 매일 |
 
 ### 7) 실행 / Run
 

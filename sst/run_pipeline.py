@@ -29,10 +29,13 @@ OUT_DIR   = str(OUT_DIR)
 
 # Overwrite semantics: wipe any prior contents of Output/SST/ so stale files
 # from previous runs (different date windows, different report content) don't
-# linger alongside fresh output.
+# linger alongside fresh output. Preserve .gitkeep so the empty directory
+# stays committed.
 import shutil as _shutil
 if os.path.isdir(OUT_DIR):
     for _e in os.listdir(OUT_DIR):
+        if _e == ".gitkeep":
+            continue
         _p = os.path.join(OUT_DIR, _e)
         if os.path.isfile(_p) or os.path.islink(_p):
             os.remove(_p)

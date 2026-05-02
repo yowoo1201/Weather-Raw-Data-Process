@@ -51,10 +51,15 @@ NOW_DIR    = WORK_DIR / "pacific_now"
 CLIM_DIR   = WORK_DIR / "pacific_clim"
 
 def _clear_dir(d: Path) -> None:
-    """Remove all contents of a directory (leave the directory itself)."""
+    """Remove all contents of a directory (leave the directory itself).
+
+    .gitkeep is preserved so the empty output directory remains committed.
+    """
     if not d.is_dir():
         return
     for entry in d.iterdir():
+        if entry.name == ".gitkeep":
+            continue
         if entry.is_file() or entry.is_symlink():
             entry.unlink()
         else:

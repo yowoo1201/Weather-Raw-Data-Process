@@ -31,9 +31,11 @@ Input/*
 
 # Generated outputs (regenerable from Input/ via run_all.py)
 Output/SST/*
-Output/Subsurface/*
+Output/Subsurface/Pacific/*
+Output/Subsurface/Indian/*
 !Output/SST/.gitkeep
-!Output/Subsurface/.gitkeep
+!Output/Subsurface/Pacific/.gitkeep
+!Output/Subsurface/Indian/.gitkeep
 
 # Subsurface extraction work dir
 subsurface/pmel_data/

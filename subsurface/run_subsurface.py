@@ -1,20 +1,19 @@
-"""TAO/TRITON Pacific subsurface daily section pipeline (local runner).
+"""TAO/TRITON Pacific + RAMA Indian Ocean subsurface daily section pipeline.
 
-Ported from Colab notebook ``enso_buoy_doy_climatology.ipynb`` for local
-execution. Reads tarballs from ``../Input/`` (relative to this script),
-writes per-day PNGs, CSV, and a zip package to ``../Output/Subsurface/``.
+Refactored from a Pacific-only Colab port to support both ocean basins via
+``--basin pacific|indian|both`` (default: both). Reads tarballs from
+``Input/``, writes per-day PNGs, CSV, and zip to
+``Output/Subsurface/<Pacific|Indian>/``.
 
-Inputs:
-  - Input/data.tar                       (PMEL TAO/TRITON raw daily ASCII)
-  - Input/data_p_clim_processed.tar.gz   (per-longitude DOY climatology)
+Inputs (per basin, see basin_config.py):
+  Pacific: Input/data.tar + Input/data_p_clim_processed.tar.gz
+  Indian:  Input/data_rama.tar + Input/data_rama_clim_processed.tar.gz
 
-Outputs (under Output/Subsurface/):
-  - pac_5_anomaly_YYYYMMDD.png
-  - pac_5_absolute_YYYYMMDD.png
-  - pac_5_data.csv
-  - pac_5_plots.zip
+Indian basin additionally produces IOD-relevant box aggregation
+(WTIO / SETIO + DMI proxy) into ind_iod_boxes.csv + ind_iod_timeseries.png.
 """
 
+import argparse
 import gzip
 import os
 import re
@@ -33,7 +32,12 @@ import pandas as pd
 from matplotlib.ticker import MultipleLocator
 from scipy.interpolate import griddata
 
+# basin_config sits next to this script
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from basin_config import BASINS, BasinConfig  # noqa: E402
+
 warnings.filterwarnings("ignore")
+
 
 # ────────────────────────────────────────────────────────────
 # 0. PATH LAYOUT
@@ -41,20 +45,27 @@ warnings.filterwarnings("ignore")
 SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR   = SCRIPT_DIR.parent
 INPUT_DIR  = ROOT_DIR / "Input"
-OUTPUT_DIR = ROOT_DIR / "Output" / "Subsurface"
-WORK_DIR   = SCRIPT_DIR / "pmel_data"
+SUBSURFACE_OUT = ROOT_DIR / "Output" / "Subsurface"
+WORK_DIR_BASE  = SCRIPT_DIR / "pmel_data"
 
-RAW_TAR    = INPUT_DIR / "data.tar"
-CLIM_TAR   = INPUT_DIR / "data_p_clim_processed.tar.gz"
 
-NOW_DIR    = WORK_DIR / "pacific_now"
-CLIM_DIR   = WORK_DIR / "pacific_clim"
+# ────────────────────────────────────────────────────────────
+# 1. CONSTANTS
+# ────────────────────────────────────────────────────────────
+DAYS_BACK = 15
 
+ANOM_LEVELS = np.array([-5, -4, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 4, 5])
+ANOM_CMAP   = "RdBu_r"
+ABS_LEVELS  = np.array([14, 16, 18, 20, 22, 24, 26, 28, 30])
+ABS_CMAP    = "turbo"
+ABS_UNDER_COLOR = "#0a1a3d"
+
+
+# ────────────────────────────────────────────────────────────
+# 2. HELPERS
+# ────────────────────────────────────────────────────────────
 def _clear_dir(d: Path) -> None:
-    """Remove all contents of a directory (leave the directory itself).
-
-    .gitkeep is preserved so the empty output directory remains committed.
-    """
+    """Remove all contents of a directory; preserve .gitkeep."""
     if not d.is_dir():
         return
     for entry in d.iterdir():
@@ -66,50 +77,7 @@ def _clear_dir(d: Path) -> None:
             shutil.rmtree(entry, ignore_errors=True)
 
 
-# Overwrite semantics: wipe any prior contents of Output/Subsurface/ so stale
-# PNGs from older windows don't linger alongside the fresh run. Also clear the
-# extraction work dir so we never mix stale ASCII with the new tarballs.
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-_clear_dir(OUTPUT_DIR)
-if WORK_DIR.is_dir():
-    shutil.rmtree(WORK_DIR, ignore_errors=True)
-NOW_DIR.mkdir(parents=True, exist_ok=True)
-CLIM_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# ────────────────────────────────────────────────────────────
-# 1. CONFIG
-# ────────────────────────────────────────────────────────────
-DAYS_BACK = 15
-
-PAC_LON_GRID = np.arange(130, 271, 2.0)   # 130°E → 90°W
-DEPTH_GRID   = np.arange(0, 351, 5.0)     # 0–350 m
-
-PAC_BANDS = [
-    # (name, label, lat_min, lat_max, use_clim)
-    ("pac_5", "±5° (CPC standard)", -5.0, 5.0, True),
-]
-
-ANOM_LEVELS = np.array([-5, -4, -3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 4, 5])
-ANOM_CMAP   = "RdBu_r"
-ABS_LEVELS  = np.array([14, 16, 18, 20, 22, 24, 26, 28, 30])
-ABS_CMAP    = "turbo"
-ABS_UNDER_COLOR = "#0a1a3d"
-
-NINO_BOXES = {
-    "Niño 4":   (160, 210),
-    "Niño 3.4": (190, 240),
-    "Niño 3":   (210, 270),
-    "Niño 1+2": (270, 280),
-}
-
-
-# ────────────────────────────────────────────────────────────
-# 2. EXTRACTION
-# ────────────────────────────────────────────────────────────
 def extract_tar(tar_path: Path, target: Path) -> None:
-    if not tar_path.exists():
-        raise FileNotFoundError(f"Missing input tarball: {tar_path}")
     open_mode = "r:gz" if tar_path.name.endswith((".tar.gz", ".tgz")) else "r"
     with tarfile.open(tar_path, open_mode) as tf:
         for m in tf.getmembers():
@@ -127,42 +95,60 @@ def gunzip_dir(d: Path) -> None:
                 shutil.copyfileobj(f_in, f_out)
 
 
-def stage_inputs() -> tuple[list[Path], list[Path]]:
-    print("=== [1] Extract input tarballs ===")
-    extract_tar(RAW_TAR,  NOW_DIR)
-    extract_tar(CLIM_TAR, CLIM_DIR)
-    gunzip_dir(NOW_DIR)
-    gunzip_dir(CLIM_DIR)
-    now_files  = sorted(NOW_DIR.glob("*_dy.ascii"))
-    clim_files = sorted(CLIM_DIR.glob("*_clim.ascii"))
-    print(f"   pacific_now:   {len(now_files):3d} files (raw daily)")
-    print(f"   pacific_clim:  {len(clim_files):3d} files (per-lon climatology)")
-    return now_files, clim_files
+def _parse_decimal(int_part: str, dec_part: str) -> float:
+    """RAMA filenames encode 80.5°E as either '80_5e' or '80.5e' depending on
+    source. Handle both by joining with '.' if a decimal-part group matched.
+    """
+    if dec_part:
+        return float(f"{int_part}.{dec_part}")
+    return float(int_part)
 
 
 # ────────────────────────────────────────────────────────────
-# 3. PMEL DDS ASCII PARSER (raw daily)
+# 3. FILENAME PARSERS (decimal-aware for RAMA)
 # ────────────────────────────────────────────────────────────
-FNAME_RE = re.compile(
-    r"t(\d+(?:\.\d+)?)([ns])(\d+(?:\.\d+)?)([ew])_dy\.ascii",
+# Raw daily file: t<lat><n|s><lon><e|w>_dy.ascii where lat/lon may have
+# a decimal part separated by '.' or '_' (e.g. t0n80_5e_dy.ascii or
+# t0n80.5e_dy.ascii). Lat or lon decimals are independent.
+RAW_FNAME_RE = re.compile(
+    r"t(\d+)(?:[._](\d+))?([ns])(\d+)(?:[._](\d+))?([ew])_dy\.ascii",
+    re.I,
+)
+CLIM_FNAME_RE = re.compile(
+    r"t(\d+)(?:[._](\d+))?([ew])_clim\.ascii",
     re.I,
 )
 
 
-def parse_filename(path: Path):
-    m = FNAME_RE.search(path.name)
+def parse_raw_filename(path: Path):
+    m = RAW_FNAME_RE.search(path.name)
     if not m:
         return None
-    lat_v = float(m.group(1)); lat_h = m.group(2).lower()
-    lon_v = float(m.group(3)); lon_h = m.group(4).lower()
-    lat = -lat_v if lat_h == "s" else lat_v
-    lon = -lon_v if lon_h == "w" else lon_v
+    lat = _parse_decimal(m.group(1), m.group(2))
+    if m.group(3).lower() == "s":
+        lat = -lat
+    lon = _parse_decimal(m.group(4), m.group(5))
+    if m.group(6).lower() == "w":
+        lon = -lon
     lon360 = lon if lon >= 0 else lon + 360
     return lat, lon360
 
 
+def parse_clim_filename(path: Path):
+    m = CLIM_FNAME_RE.search(path.name)
+    if not m:
+        return None
+    lon = _parse_decimal(m.group(1), m.group(2))
+    if m.group(3).lower() == "w":
+        lon = -lon
+    return lon if lon >= 0 else lon + 360
+
+
+# ────────────────────────────────────────────────────────────
+# 4. ASCII PARSERS
+# ────────────────────────────────────────────────────────────
 def parse_pmel_ascii(path: Path, max_quality: int = 3) -> pd.DataFrame:
-    coords = parse_filename(path)
+    coords = parse_raw_filename(path)
     if coords is None:
         return pd.DataFrame()
     lat, lon360 = coords
@@ -229,21 +215,6 @@ def parse_pmel_ascii(path: Path, max_quality: int = 3) -> pd.DataFrame:
     return df
 
 
-# ────────────────────────────────────────────────────────────
-# 4. CLIMATOLOGY LOADER
-# ────────────────────────────────────────────────────────────
-CLIM_FNAME_RE = re.compile(r"t(\d+(?:\.\d+)?)([ew])_clim\.ascii", re.I)
-
-
-def parse_clim_filename(path: Path):
-    m = CLIM_FNAME_RE.search(path.name)
-    if not m:
-        return None
-    lon_v = float(m.group(1)); lon_h = m.group(2).lower()
-    lon = -lon_v if lon_h == "w" else lon_v
-    return lon if lon >= 0 else lon + 360
-
-
 def parse_clim_ascii(path: Path) -> pd.DataFrame:
     lon360 = parse_clim_filename(path)
     if lon360 is None:
@@ -286,34 +257,44 @@ def parse_clim_ascii(path: Path) -> pd.DataFrame:
 
 
 # ────────────────────────────────────────────────────────────
-# 5. MERIDIONAL BAND AVERAGE
+# 5. BAND WEIGHTING
 # ────────────────────────────────────────────────────────────
-def compute_band_weights(lats_sorted, lat_min, lat_max):
-    n = len(lats_sorted)
-    if n == 0:
-        return np.array([])
-    if n == 1:
-        return np.array([1.0])
-    boundaries = [lat_min]
-    for i in range(n - 1):
-        boundaries.append((lats_sorted[i] + lats_sorted[i + 1]) / 2.0)
-    boundaries.append(lat_max)
-    widths = np.diff(boundaries)
-    return widths / widths.sum()
+def select_lat_weights(used_lats: list[float], cfg: BasinConfig) -> dict:
+    """Pick the appropriate weight scheme based on which lats are present.
+
+    If all keys of ``lat_weights_full`` (5-point) appear, use it. Otherwise
+    fall back to ``lat_weights_sparse`` and renormalize over actually-present
+    lats. Lats not in either scheme are dropped.
+    """
+    full_keys = set(cfg.lat_weights_full)
+    if full_keys.issubset(set(used_lats)):
+        return dict(cfg.lat_weights_full)
+    sparse = {k: v for k, v in cfg.lat_weights_sparse.items() if k in used_lats}
+    if not sparse:
+        # Last-resort: equal-weight whatever lats are available within the band
+        if used_lats:
+            return {lat: 1.0 / len(used_lats) for lat in used_lats}
+        return {}
+    total = sum(sparse.values())
+    return {k: v / total for k, v in sparse.items()}
 
 
-def make_band(raw, lat_min, lat_max, name, label):
+def make_band(raw: pd.DataFrame, cfg: BasinConfig):
     if raw.empty:
         return pd.DataFrame(), [], None
-    sub = raw[(raw["latitude"] >= lat_min) & (raw["latitude"] <= lat_max)].copy()
+    lo, hi = cfg.lat_band
+    sub = raw[(raw["latitude"] >= lo) & (raw["latitude"] <= hi)].copy()
     if sub.empty:
-        print(f"   {name:12s}  no buoys in [{lat_min}, {lat_max}]")
+        print(f"   no buoys in [{lo}, {hi}]")
         return pd.DataFrame(), [], None
     used_lats = sorted(sub["latitude"].unique())
-    used_lons = sorted(sub["longitude"].unique())
+    weight_map = select_lat_weights(used_lats, cfg)
+    if not weight_map:
+        print(f"   no usable lats in [{lo}, {hi}]")
+        return pd.DataFrame(), [], None
 
-    weights = compute_band_weights(used_lats, lat_min, lat_max)
-    weight_map = dict(zip(used_lats, weights))
+    # Drop rows whose lat isn't in the chosen weight scheme
+    sub = sub[sub["latitude"].isin(weight_map.keys())].copy()
     sub["_w"]   = sub["latitude"].map(weight_map).astype(float)
     sub["_T_w"] = sub["T"] * sub["_w"]
 
@@ -327,20 +308,20 @@ def make_band(raw, lat_min, lat_max, name, label):
     g["T"] = g["T_w_sum"] / g["w_sum"]
     g = g.drop(columns=["T_w_sum", "w_sum"])
 
-    weight_str = ", ".join(f"{lat:+g}°={w:.3f}" for lat, w in zip(used_lats, weights))
-    print(f"   {name:12s}  {label:32s}")
-    print(f"                  lats: {used_lats}")
-    print(f"                  weights (trapezoidal): {weight_str}")
-    print(f"                  {len(used_lons)} lons, {len(g):,} cells")
-    return g, used_lats, weights
+    weight_str = ", ".join(
+        f"{lat:+g}°={w:.3f}" for lat, w in weight_map.items())
+    print(f"                  lats used: {sorted(weight_map.keys())}")
+    print(f"                  weights: {weight_str}")
+    print(f"                  {sub['lon_key'].nunique()} lons, {len(g):,} cells")
+    return g, list(weight_map.keys()), list(weight_map.values())
 
 
 # ────────────────────────────────────────────────────────────
-# 6. ANOMALY (per-lon DOY clim with fallback chain)
+# 6. ANOMALY ATTACHMENT (fallback chain)
 # ────────────────────────────────────────────────────────────
-def attach_anomaly(obs, clim_df, use_clim, name):
+def attach_anomaly(obs: pd.DataFrame, clim_df: pd.DataFrame, use_clim: bool):
     if obs.empty:
-        return obs, "empty", 0, 0
+        return obs, "empty"
     obs = obs.copy()
 
     if not use_clim or clim_df.empty:
@@ -348,7 +329,7 @@ def attach_anomaly(obs, clim_df, use_clim, name):
                   .mean().rename(columns={"T": "T_clim"}))
         obs = obs.merge(fb, on=["lon_key", "depth"], how="left")
         obs["anom"] = obs["T"] - obs["T_clim"]
-        return obs, "in-period mean (band excluded from climatology)", 0, len(obs)
+        return obs, "in-period mean (no climatology available)"
 
     clim_keyed = clim_df.rename(columns={"lon360": "lon_key"})[
         ["lon_key", "depth", "doy", "T_clim"]]
@@ -410,7 +391,7 @@ def attach_anomaly(obs, clim_df, use_clim, name):
              f"(exact={n_exact}, +depth_interp={n_after_depth - n_exact}, "
              f"+lon_interp={n_after_lon - n_after_depth}, "
              f"+inperiod_fallback={n_fallback})")
-    return obs, label, n_exact, len(obs)
+    return obs, label
 
 
 # ────────────────────────────────────────────────────────────
@@ -468,12 +449,14 @@ def make_section(df_day, lon_grid, depth_grid,
     return T_g, A_g
 
 
-def assemble_daily(obs, lon_grid, depth_grid, dates):
+def assemble_daily(obs, lon_grid, depth_grid, dates,
+                   max_extrap_lon, max_extrap_dep):
     out = []
     last_T, last_A = None, None
     for d in dates:
         sub = obs[obs["date"] == pd.Timestamp(d)] if not obs.empty else obs
-        T_g, A_g = make_section(sub, lon_grid, depth_grid)
+        T_g, A_g = make_section(sub, lon_grid, depth_grid,
+                                max_extrap_lon, max_extrap_dep)
         if np.isnan(T_g).all() and last_T is not None:
             T_g, A_g = last_T.copy(), last_A.copy(); tag = "(carry)"
         elif np.isnan(T_g).all():
@@ -487,30 +470,26 @@ def assemble_daily(obs, lon_grid, depth_grid, dates):
 # ────────────────────────────────────────────────────────────
 # 8. PLOTTING
 # ────────────────────────────────────────────────────────────
-def fmt_lon(x, pos=None):
-    if x > 180:
-        return f"{int(360 - x)}°W"
-    if x == 180:
-        return "180°"
-    return f"{int(x)}°E"
-
-
 def actual_buoy_lons(obs):
     if obs is None or obs.empty:
         return []
     return sorted(obs["lon_key"].unique())
 
 
-def lat_label_from_list(lats, fallback):
+def lat_label_from_list(lats):
+    lats = sorted(lats)
     if not lats:
-        return fallback
+        return ""
     if len(lats) == 1:
         return f"{lats[0]:+g}°"
     return f"{lats[0]:+g}° to {lats[-1]:+g}° ({len(lats)} lines)"
 
 
-def plot_single(date, A, T, tag, kind, lon_grid, depth_grid,
+def plot_single(date, A, T, tag, kind, cfg: BasinConfig,
                 buoy_lons, lat_label_str, savepath, baseline=""):
+    lon_grid   = cfg.lon_grid
+    depth_grid = cfg.depth_grid
+
     fig, ax = plt.subplots(figsize=(11, 4.2))
 
     if kind == "anomaly":
@@ -570,7 +549,7 @@ def plot_single(date, A, T, tag, kind, lon_grid, depth_grid,
     ax.set_xlabel("Longitude", fontsize=10)
     ax.set_ylabel("Depth (m)", fontsize=10)
     ax.xaxis.set_major_locator(MultipleLocator(10))
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(fmt_lon))
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(cfg.fmt_lon))
     ax.tick_params(axis="both", labelsize=8)
     ax.grid(alpha=0.25, linewidth=0.25)
     for sp in ax.spines.values():
@@ -580,7 +559,7 @@ def plot_single(date, A, T, tag, kind, lon_grid, depth_grid,
         ax.plot(lon, 348, marker="^", color="black", markersize=5, clip_on=False)
 
     if kind == "anomaly":
-        for nm, (lo, hi) in NINO_BOXES.items():
+        for nm, (lo, hi) in cfg.overlay_boxes.items():
             ax.fill_between([lo, hi], 0, 7, color="steelblue", alpha=0.55,
                             edgecolor="none", zorder=5)
             ax.text((lo + hi) / 2, 3.5, nm, fontsize=6.5,
@@ -588,7 +567,7 @@ def plot_single(date, A, T, tag, kind, lon_grid, depth_grid,
                     fontweight="bold", zorder=6)
 
     title_kind = "Anomaly" if kind == "anomaly" else "Absolute Temperature"
-    title = (f"Equatorial Pacific (TAO/TRITON) ±5°  —  "
+    title = (f"{cfg.title_label}  —  "
              f"{date.strftime('%b %d, %Y')}  —  Daily {title_kind}")
     if tag:
         title += f"  {tag}"
@@ -615,22 +594,24 @@ def plot_single(date, A, T, tag, kind, lon_grid, depth_grid,
 
 
 # ────────────────────────────────────────────────────────────
-# 9. DIAGNOSTICS + OUTPUT
+# 9. DIAGNOSTICS
 # ────────────────────────────────────────────────────────────
-def print_diagnostics(sections):
+def print_pacific_diagnostics(sections, cfg: BasinConfig):
+    lon_grid = cfg.lon_grid
+    depth_grid = cfg.depth_grid
     print("\nSubsurface (50–200 m) anomaly maximum per day, ±5° band:")
     print("─" * 60)
     for date, A, T, tag in sections:
         if np.isnan(A).all():
             print(f"   {date}   no data"); continue
-        mask_d = (DEPTH_GRID >= 50) & (DEPTH_GRID <= 200)
+        mask_d = (depth_grid >= 50) & (depth_grid <= 200)
         sub = A[mask_d, :]
         if np.isnan(sub).all():
             print(f"   {date}   all-NaN subsurface"); continue
         j = np.unravel_index(np.nanargmax(sub), sub.shape)
         print(f"   {date}   max +{sub[j]:4.2f} °C   "
-              f"@ {fmt_lon(PAC_LON_GRID[j[1]]):>7}"
-              f"  / {int(DEPTH_GRID[mask_d][j[0]]):>3} m  {tag}")
+              f"@ {cfg.fmt_lon(lon_grid[j[1]]):>7}"
+              f"  / {int(depth_grid[mask_d][j[0]]):>3} m  {tag}")
 
     print("\nSurface (0–30 m) max & 28 °C span:")
     print("─" * 60)
@@ -641,13 +622,322 @@ def print_diagnostics(sections):
         above28 = ~np.isnan(sst_row) & (sst_row > 28)
         if above28.any():
             idxs = np.where(above28)[0]
-            span = (f"28°C: {fmt_lon(PAC_LON_GRID[idxs[0]])} → "
-                    f"{fmt_lon(PAC_LON_GRID[idxs[-1]])}")
+            span = (f"28°C: {cfg.fmt_lon(lon_grid[idxs[0]])} → "
+                    f"{cfg.fmt_lon(lon_grid[idxs[-1]])}")
         else:
             span = "no >28°C surface"
         print(f"   {date}   SST max {np.nanmax(T[0:6, :]):4.1f} °C   {span}  {tag}")
 
 
+def print_indian_diagnostics(sections, cfg: BasinConfig, iod_df: pd.DataFrame):
+    lon_grid = cfg.lon_grid
+    depth_grid = cfg.depth_grid
+
+    print("\nIOD proxy (WTIO − SETIO box-mean SSTA, surface 0–10 m):")
+    print("─" * 60)
+    if iod_df.empty:
+        print("   no IOD aggregation available")
+    else:
+        wide = iod_df.pivot_table(index="date", columns="box",
+                                  values="ssta_mean").sort_index()
+        for date, row in wide.iterrows():
+            wtio = row.get("WTIO", np.nan)
+            setio = row.get("SETIO", np.nan)
+            dmi = wtio - setio if not (np.isnan(wtio) or np.isnan(setio)) else np.nan
+            tag = ""
+            if not np.isnan(dmi):
+                if dmi >= 0.4:
+                    tag = "(+IOD threshold)"
+                elif dmi <= -0.4:
+                    tag = "(−IOD threshold)"
+            print(f"   {date.date()}   WTIO {wtio:+.2f}   "
+                  f"SETIO {setio:+.2f}   DMI {dmi:+.2f}  {tag}")
+
+    print("\nEquatorial thermocline tilt (20°C isotherm depth, west−east):")
+    print("─" * 60)
+    for date, A, T, tag in sections:
+        if np.isnan(T).all():
+            print(f"   {date}   no data"); continue
+        # Find 20°C depth at 60°E and 90°E (nearest grid lon)
+        west_idx = np.argmin(np.abs(lon_grid - 60))
+        east_idx = np.argmin(np.abs(lon_grid - 90))
+
+        def iso20_depth(col):
+            if np.isnan(col).all():
+                return np.nan
+            # First depth where T crosses 20°C from above
+            above = col > 20
+            below = col <= 20
+            for i in range(len(col) - 1):
+                if above[i] and below[i + 1]:
+                    return depth_grid[i + 1]
+            return np.nan
+
+        d_west = iso20_depth(T[:, west_idx])
+        d_east = iso20_depth(T[:, east_idx])
+        if np.isnan(d_west) or np.isnan(d_east):
+            print(f"   {date}   20°C not found at 60°E or 90°E   {tag}")
+            continue
+        diff = d_west - d_east
+        flag = "(+IOD-like)" if diff < 0 else ""
+        print(f"   {date}   20°C depth: 60°E={int(d_west):3d}m   "
+              f"90°E={int(d_east):3d}m   tilt(W−E)={int(diff):+3d}m  "
+              f"{flag}  {tag}")
+
+
+# ────────────────────────────────────────────────────────────
+# 10. IOD BOX AGGREGATION (Indian only)
+# ────────────────────────────────────────────────────────────
+def aggregate_iod_boxes(raw: pd.DataFrame, clim_df: pd.DataFrame,
+                        cfg: BasinConfig, dates):
+    """Per-date box-mean SST anomaly for WTIO and SETIO boxes.
+
+    Uses surface (0–10 m) buoy observations within each box. Anomaly is from
+    per-lon DOY climatology (or in-period mean fallback). Returns a long-form
+    DataFrame: [date, box, n_buoys, ssta_mean, ssta_std, lats_used, lons_used].
+    """
+    rows = []
+    if raw.empty:
+        return pd.DataFrame(columns=["date", "box", "n_buoys", "ssta_mean",
+                                      "ssta_std", "lats_used", "lons_used"])
+
+    # Build a (lon, doy, depth) → T_clim lookup once
+    clim_lookup = (clim_df.set_index(["lon360", "doy", "depth"])["T_clim"]
+                   if not clim_df.empty else pd.Series(dtype=float))
+
+    surface = raw[(raw["depth"] <= 10.0) & (raw["depth"] >= 0.0)].copy()
+    if surface.empty:
+        return pd.DataFrame(columns=["date", "box", "n_buoys", "ssta_mean",
+                                      "ssta_std", "lats_used", "lons_used"])
+
+    for box_name, (lo_w, lo_e, la_s, la_n) in cfg.iod_boxes.items():
+        in_box = surface[
+            (surface["longitude"] >= lo_w) & (surface["longitude"] <= lo_e) &
+            (surface["latitude"]  >= la_s) & (surface["latitude"]  <= la_n)
+        ].copy()
+        if in_box.empty:
+            continue
+
+        # Attach climatology + anomaly
+        anoms = []
+        for _, r in in_box.iterrows():
+            lon, doy, dep, T = r["lon_key"], int(r["doy"]), float(r["depth"]), float(r["T"])
+            tc = np.nan
+            try:
+                tc = float(clim_lookup.loc[(lon, doy, dep)])
+            except (KeyError, TypeError):
+                pass
+            anoms.append(T - tc if not np.isnan(tc) else np.nan)
+        in_box["anom"] = anoms
+
+        # Daily aggregation (require ≥2 buoys per day for robustness)
+        for date in dates:
+            day = in_box[in_box["date"] == pd.Timestamp(date)]
+            day = day.dropna(subset=["anom"])
+            n_buoys = day[["latitude", "longitude"]].drop_duplicates().shape[0]
+            if n_buoys < 2:
+                continue
+            rows.append({
+                "date": pd.Timestamp(date),
+                "box": box_name,
+                "n_buoys": n_buoys,
+                "ssta_mean": float(day["anom"].mean()),
+                "ssta_std":  float(day["anom"].std()) if len(day) > 1 else 0.0,
+                "lats_used": ",".join(f"{x:g}" for x in sorted(day["latitude"].unique())),
+                "lons_used": ",".join(f"{x:g}" for x in sorted(day["lon_key"].unique())),
+            })
+
+    return pd.DataFrame(rows)
+
+
+def plot_iod_timeseries(iod_df: pd.DataFrame, savepath: Path):
+    if iod_df.empty:
+        return
+    wide = iod_df.pivot_table(index="date", columns="box",
+                              values="ssta_mean").sort_index()
+    wide["DMI"] = wide.get("WTIO") - wide.get("SETIO")
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    if "WTIO" in wide.columns:
+        ax.plot(wide.index, wide["WTIO"], "-o", label="WTIO", color="#1f77b4", lw=1.6, ms=5)
+    if "SETIO" in wide.columns:
+        ax.plot(wide.index, wide["SETIO"], "-o", label="SETIO", color="#d62728", lw=1.6, ms=5)
+    if "DMI" in wide.columns:
+        ax.plot(wide.index, wide["DMI"], "-s", label="DMI (WTIO − SETIO)",
+                color="black", lw=1.8, ms=6)
+
+    for y in (-1.0, -0.4, 0.4, 1.0):
+        ax.axhline(y, color="gray", lw=0.4,
+                   ls="--" if abs(y) == 0.4 else ":", alpha=0.5)
+    ax.axhline(0, color="black", lw=0.5)
+
+    ax.set_xlabel("Date")
+    ax.set_ylabel("SSTA (°C)")
+    ax.set_title("Indian Ocean IOD-relevant box anomalies (RAMA buoy proxy)\n"
+                 "±0.4 / ±1.0 °C dashed: rough +IOD / strong-IOD reference",
+                 fontsize=11, fontweight="bold")
+    ax.grid(alpha=0.3, linewidth=0.4)
+    ax.legend(loc="best", fontsize=9)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(savepath, dpi=130, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+
+# ────────────────────────────────────────────────────────────
+# 11. PER-BASIN PIPELINE
+# ────────────────────────────────────────────────────────────
+def run_basin(cfg: BasinConfig) -> int:
+    """Run the full pipeline for one basin. Returns 0 on success, 2 if the
+    basin is skipped due to missing inputs (still considered non-fatal)."""
+    print("\n" + "=" * 70)
+    print(f"  BASIN: {cfg.name.upper()}  (output → Output/Subsurface/{cfg.output_dirname}/)")
+    print("=" * 70)
+
+    out_dir  = SUBSURFACE_OUT / cfg.output_dirname
+    work_now = WORK_DIR_BASE / f"{cfg.work_subdir}_now"
+    work_clim = WORK_DIR_BASE / f"{cfg.work_subdir}_clim"
+    raw_tar  = INPUT_DIR / cfg.raw_tar
+    clim_tar = INPUT_DIR / cfg.clim_tar
+
+    # Output dir setup with overwrite (preserve .gitkeep)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _clear_dir(out_dir)
+
+    if not raw_tar.exists():
+        print(f"   [skip] {cfg.raw_tar} not found in Input/", file=sys.stderr)
+        return 2
+
+    # Wipe and re-extract
+    if work_now.is_dir():
+        shutil.rmtree(work_now, ignore_errors=True)
+    if work_clim.is_dir():
+        shutil.rmtree(work_clim, ignore_errors=True)
+    work_now.mkdir(parents=True, exist_ok=True)
+    work_clim.mkdir(parents=True, exist_ok=True)
+
+    print("=== [1] Extract input tarballs ===")
+    extract_tar(raw_tar, work_now)
+    has_clim = clim_tar.exists()
+    if has_clim:
+        extract_tar(clim_tar, work_clim)
+    else:
+        print(f"   [warn] {cfg.clim_tar} not found — anomaly will use in-period mean",
+              file=sys.stderr)
+    gunzip_dir(work_now)
+    if has_clim:
+        gunzip_dir(work_clim)
+
+    now_files  = sorted(work_now.glob("*_dy.ascii"))
+    clim_files = sorted(work_clim.glob("*_clim.ascii")) if has_clim else []
+    print(f"   raw:  {len(now_files):3d} files")
+    print(f"   clim: {len(clim_files):3d} files")
+
+    # Filter t-profile only (exclude surface-only sst*)
+    t_profile_files = [p for p in now_files if re.match(r"^t\d", p.name)]
+    if not t_profile_files:
+        sample = ", ".join(p.name for p in now_files[:3]) if now_files else "(none)"
+        print(
+            f"   [skip] {cfg.raw_tar} has no subsurface T-profile files "
+            f"(`t<lat>...<lon>..._dy.ascii`).\n"
+            f"          Found instead: {sample} ...\n"
+            f"          Need RAMA/TAO/TRITON multi-depth profile data, not "
+            f"surface-only SST (`sst*_dy.ascii`).",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"\n=== [2] Parse {len(t_profile_files)} raw daily files ===")
+    frames = [df for df in (parse_pmel_ascii(p) for p in t_profile_files) if not df.empty]
+    if not frames:
+        print("   [skip] no parseable raw data found.", file=sys.stderr)
+        return 2
+    raw = pd.concat(frames, ignore_index=True)
+    print(f"   → {len(raw):,} rows, {raw['date'].nunique()} dates, "
+          f"{raw['lon_key'].nunique()} lons, "
+          f"{raw['latitude'].nunique()} lats")
+    print(f"   Lons: {sorted(raw['lon_key'].unique())}")
+    print(f"   Lats: {sorted(raw['latitude'].unique())}")
+
+    clim_df = pd.DataFrame()
+    if has_clim and clim_files:
+        print("\n=== [3] Load per-longitude DOY climatology ===")
+        cframes = [c for c in (parse_clim_ascii(p) for p in clim_files) if not c.empty]
+        if cframes:
+            clim_df = pd.concat(cframes, ignore_index=True)
+        print(f"   → {len(clim_df):,} climatology cells across "
+              f"{clim_df['lon360'].nunique() if not clim_df.empty else 0} longitudes")
+
+    end_date   = raw["date"].max().date()
+    start_date = end_date - timedelta(days=DAYS_BACK - 1)
+    dates      = [start_date + timedelta(days=i) for i in range(DAYS_BACK)]
+    print(f"\n=== [4] Window: {start_date} → {end_date}  ({DAYS_BACK} days) ===")
+
+    print("\n=== [5] Meridional weighted average ===")
+    band_df, used_lats, _w = make_band(raw, cfg)
+
+    print("\n=== [6] Anomaly attachment ===")
+    band_df, baseline = attach_anomaly(band_df, clim_df, use_clim=True)
+    print(f"   {baseline}")
+
+    print("\n=== [7] Section interpolation ===")
+    sections = assemble_daily(
+        band_df, cfg.lon_grid, cfg.depth_grid, dates,
+        cfg.extrap_lon_mask, cfg.extrap_depth_mask,
+    )
+    if sections:
+        _, _, T, _ = sections[-1]
+        c = "empty" if np.isnan(T).all() else f"{100 * (1 - np.isnan(T).mean()):.0f}%"
+        print(f"   latest-day coverage: {c}")
+
+    print("\n=== [8] Generate per-day PNGs ===")
+    generated = []
+    if all(np.isnan(T).all() for _, _, T, _ in sections):
+        print("   ⚠  all sections empty, skipping plot step")
+    else:
+        lons  = actual_buoy_lons(band_df)
+        latL  = lat_label_from_list(used_lats)
+        for date, A, T, tag in sections:
+            date_str = date.strftime("%Y%m%d")
+            for kind in ("anomaly", "absolute"):
+                savepath = out_dir / f"{cfg.prefix}_{kind}_{date_str}.png"
+                plot_single(date, A, T, tag, kind=kind, cfg=cfg,
+                            buoy_lons=lons, lat_label_str=latL,
+                            savepath=savepath, baseline=baseline)
+                generated.append(str(savepath))
+                print(f"   ✓  {savepath.name}")
+
+    iod_df = pd.DataFrame()
+    iod_csv = None
+    iod_png = None
+    if cfg.iod_aggregation:
+        print("\n=== [10] IOD box aggregation (WTIO / SETIO) ===")
+        iod_df = aggregate_iod_boxes(raw, clim_df, cfg, dates)
+        if not iod_df.empty:
+            iod_csv = out_dir / f"{cfg.name[:3]}_iod_boxes.csv"
+            iod_df.to_csv(iod_csv, index=False, float_format="%.3f")
+            print(f"   CSV: {iod_csv.name}  ({len(iod_df)} rows)")
+            iod_png = out_dir / f"{cfg.name[:3]}_iod_timeseries.png"
+            plot_iod_timeseries(iod_df, iod_png)
+            print(f"   PNG: {iod_png.name}")
+        else:
+            print("   [warn] no IOD box rows produced (insufficient buoys per day)")
+
+    if cfg.name == "pacific":
+        print_pacific_diagnostics(sections, cfg)
+    elif cfg.name == "indian":
+        print_indian_diagnostics(sections, cfg, iod_df)
+
+    print("\n=== [9] Write CSV + zip ===")
+    write_outputs(band_df, generated, out_dir, cfg.prefix,
+                  extra_files=[p for p in (iod_csv, iod_png) if p])
+    print(f"\n✓ {cfg.name}: outputs in {out_dir}")
+    return 0
+
+
+# ────────────────────────────────────────────────────────────
+# 12. CSV + ZIP WRITERS
+# ────────────────────────────────────────────────────────────
 def lon_human(x):
     if x > 180:
         return f"{int(round(360 - x))}W"
@@ -656,8 +946,9 @@ def lon_human(x):
     return f"{int(round(x))}E"
 
 
-def write_outputs(band_df, generated_pngs, name="pac_5"):
-    csv_path = OUTPUT_DIR / f"{name}_data.csv"
+def write_outputs(band_df, generated_pngs, out_dir: Path, prefix: str,
+                  extra_files=None):
+    csv_path = out_dir / f"{prefix}_data.csv"
     df_out = band_df[[
         "date", "lon_key", "depth", "doy", "T", "T_clim", "anom", "n_lats", "latitude"
     ]].copy()
@@ -674,129 +965,49 @@ def write_outputs(band_df, generated_pngs, name="pac_5"):
                      "n_lats", "mean_lat_used"]]
     df_out = df_out.sort_values(["date", "longitude", "depth"]).reset_index(drop=True)
     df_out.to_csv(csv_path, index=False, float_format="%.3f")
-    print(f"\nCSV: {csv_path}  "
+    print(f"   CSV: {csv_path.name}  "
           f"({csv_path.stat().st_size / 1024:.0f} KB, {len(df_out):,} rows)")
 
-    zip_path = OUTPUT_DIR / f"{name}_plots.zip"
-    print(f"Packaging {len(generated_pngs)} PNGs + 1 CSV → {zip_path.name}")
+    zip_path = out_dir / f"{prefix}_plots.zip"
+    print(f"   ZIP: {zip_path.name}")
     with zipfile.ZipFile(zip_path, "w",
                          compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for f in generated_pngs:
             zf.write(f, arcname=Path(f).name)
         zf.write(csv_path, arcname=csv_path.name)
-    total_kb = sum(Path(f).stat().st_size for f in generated_pngs + [csv_path]) / 1024
-    print(f"   total uncompressed: {total_kb:6.0f} KB")
-    print(f"   zip size          : {zip_path.stat().st_size / 1024:6.0f} KB")
+        for ef in (extra_files or []):
+            if ef and Path(ef).exists():
+                zf.write(ef, arcname=Path(ef).name)
 
 
 # ────────────────────────────────────────────────────────────
-# 10. MAIN
+# 13. MAIN
 # ────────────────────────────────────────────────────────────
 def main():
-    now_files, clim_files = stage_inputs()
-    has_clim = len(clim_files) > 0
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--basin", choices=["pacific", "indian", "both"], default="both",
+        help="which basin(s) to process (default: both)",
+    )
+    args = parser.parse_args()
 
-    print("\n=== [2] Parse PMEL raw daily files ===")
-    # Subsurface T-profile files start with `t<digit>`. Surface-SST files
-    # (`sst<...>_dy.ascii`) also superficially match the FNAME_RE regex via
-    # `.search()`, so we exclude them by prefix here.
-    t_profile_files = [p for p in now_files if re.match(r"^t\d", p.name)]
-    if not t_profile_files:
-        sample = ", ".join(p.name for p in now_files[:3]) if now_files else "(none)"
-        print(
-            "ERROR: Input/data.tar contains no subsurface temperature profile "
-            "files (`t<lat><n|s><lon><e|w>_dy.ascii`).",
-            file=sys.stderr,
-        )
-        print(
-            f"       Found instead: {sample} ...\n"
-            f"       The pipeline requires PMEL TAO/TRITON multi-depth profile "
-            f"data (e.g. `t0n140w_dy.ascii`), NOT surface-only SST data "
-            f"(`sst*_dy.ascii`). Replace Input/data.tar with the correct "
-            f"tarball from the PMEL DDS portal.",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-    frames = [df for df in (parse_pmel_ascii(p) for p in t_profile_files) if not df.empty]
-    if not frames:
-        print("ERROR: no parseable raw data found.", file=sys.stderr)
+    if args.basin == "both":
+        targets = ["pacific", "indian"]
+    else:
+        targets = [args.basin]
+
+    SUBSURFACE_OUT.mkdir(parents=True, exist_ok=True)
+    WORK_DIR_BASE.mkdir(parents=True, exist_ok=True)
+
+    n_skip = 0
+    for name in targets:
+        rc = run_basin(BASINS[name])
+        if rc == 2:
+            n_skip += 1
+
+    if n_skip == len(targets):
+        print("\nERROR: all requested basins skipped.", file=sys.stderr)
         sys.exit(1)
-    pac_raw = pd.concat(frames, ignore_index=True)
-    print(f"   → {len(pac_raw):,} rows, {pac_raw['date'].nunique()} dates, "
-          f"{pac_raw['lon_key'].nunique()} buoy lons, "
-          f"{pac_raw['latitude'].nunique()} buoy lats")
-    print(f"   Lons: {sorted(pac_raw['lon_key'].unique())}")
-    print(f"   Lats: {sorted(pac_raw['latitude'].unique())}")
-
-    pac_clim = pd.DataFrame()
-    if has_clim:
-        print("\n=== [3] Load per-longitude DOY climatology ===")
-        cframes = [parse_clim_ascii(p) for p in clim_files]
-        cframes = [c for c in cframes if not c.empty]
-        if cframes:
-            pac_clim = pd.concat(cframes, ignore_index=True)
-        print(f"   → {len(pac_clim):,} climatology cells across "
-              f"{pac_clim['lon360'].nunique() if not pac_clim.empty else 0} longitudes")
-
-    end_date   = pac_raw["date"].max().date()
-    start_date = end_date - timedelta(days=DAYS_BACK - 1)
-    dates      = [start_date + timedelta(days=i) for i in range(DAYS_BACK)]
-    print(f"\n=== [4] Window: {start_date} → {end_date}  ({DAYS_BACK} days) ===")
-
-    print("\n=== [5] Meridional weighted average ===")
-    pac_bands = {}
-    pac_band_lats = {}
-    for name, label, lo, hi, _uc in PAC_BANDS:
-        pac_bands[name], pac_band_lats[name], _w = make_band(
-            pac_raw, lo, hi, name, label)
-
-    print("\n=== [6] Anomaly attachment ===")
-    pac_baselines = {}
-    band_use_clim = {n: uc for n, _l, _lo, _hi, uc in PAC_BANDS}
-    for name in pac_bands:
-        pac_bands[name], pac_baselines[name], _ne, _nt = attach_anomaly(
-            pac_bands[name], pac_clim, band_use_clim[name], name)
-        if not pac_bands[name].empty:
-            print(f"   {name:12s}  {pac_baselines[name]}")
-
-    print("\n=== [7] Section interpolation ===")
-    pac_sections = {n: assemble_daily(pac_bands[n], PAC_LON_GRID, DEPTH_GRID, dates)
-                    for n in pac_bands}
-    for n in pac_bands:
-        secs = pac_sections[n]
-        if secs:
-            _, _, T, _ = secs[-1]
-            c = "empty" if np.isnan(T).all() else f"{100 * (1 - np.isnan(T).mean()):.0f}%"
-            print(f"   {n:12s} latest-day coverage: {c}")
-
-    print("\n=== [8] Generate per-day PNGs ===")
-    generated = []
-    for name, label, _lo, _hi, _uc in PAC_BANDS:
-        secs = pac_sections[name]
-        if all(np.isnan(T).all() for _, _, T, _ in secs):
-            print(f"   ⚠  {name} skipped (no data)"); continue
-        obs   = pac_bands[name]
-        lons  = actual_buoy_lons(obs)
-        latL  = lat_label_from_list(pac_band_lats.get(name, []), label)
-        bl    = pac_baselines.get(name, "")
-        for date, A, T, tag in secs:
-            date_str = date.strftime("%Y%m%d")
-            for kind in ("anomaly", "absolute"):
-                savepath = OUTPUT_DIR / f"{name}_{kind}_{date_str}.png"
-                plot_single(date, A, T, tag, kind=kind,
-                            lon_grid=PAC_LON_GRID, depth_grid=DEPTH_GRID,
-                            buoy_lons=lons, lat_label_str=latL,
-                            savepath=savepath, baseline=bl)
-                generated.append(str(savepath))
-                print(f"   ✓  {savepath.name}")
-
-    if "pac_5" in pac_sections:
-        print_diagnostics(pac_sections["pac_5"])
-
-    print("\n=== [9] Write CSV + zip ===")
-    write_outputs(pac_bands["pac_5"], generated, name="pac_5")
-
-    print(f"\n✓ Done. Outputs in: {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

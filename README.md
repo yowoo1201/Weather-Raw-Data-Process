@@ -1,8 +1,8 @@
 # Weather-Raw-Data-Process
 
-ENSO 일별 모니터링 파이프라인 — OISST 표면 SST와 TAO/TRITON 부이 subsurface 단면도를 함께 처리.
+ENSO·IOD 일별 모니터링 파이프라인 — OISST 표면 SST(rSSTA, ENSO) + 적도 Pacific(TAO/TRITON) 및 적도 Indian Ocean(RAMA) 부이 subsurface 단면도.
 
-ENSO daily monitoring pipelines — OISST surface SST + TAO/TRITON buoy subsurface cross-sections.
+ENSO/IOD daily monitoring pipelines — OISST surface SST (rSSTA, ENSO) + equatorial Pacific (TAO/TRITON) and equatorial Indian Ocean (RAMA) buoy subsurface cross-sections.
 
 ---
 
@@ -10,22 +10,28 @@ ENSO daily monitoring pipelines — OISST surface SST + TAO/TRITON buoy subsurfa
 
 ```
 Code/
-├── Input/                    # 원천 데이터 (gitignored / not committed)
-│   ├── oisst_data/*.nc       # NOAA OISST v2.1 AVHRR 일별 .nc
-│   ├── nino_clim_daily_1991-2020.csv
-│   ├── wksst9120.for.txt     # CPC 주간 절대 SSTA
-│   ├── rel_wksst9120.txt     # CPC 주간 relative SSTA
-│   ├── data.tar              # PMEL TAO/TRITON 부이 subsurface T-profile
-│   └── data_p_clim_processed.tar.gz   # per-longitude DOY climatology
-├── Output/                   # 자동 생성 (gitignored / regenerated each run)
-│   ├── SST/                  # nino_*.csv, *.png, nino_report.md, .zip
-│   └── Subsurface/           # pac_5_*.png, pac_5_data.csv, pac_5_plots.zip
-├── sst/run_pipeline.py       # SST/rSSTA pipeline
-├── subsurface/run_subsurface.py  # subsurface section pipeline
-├── run_all.py                # 두 파이프라인 일괄 실행 / runner for both
+├── Input/                                    # 원천 데이터
+│   ├── oisst_data/*.nc                       # NOAA OISST v2.1 AVHRR 일별 .nc
+│   ├── nino_clim_daily_1991-2020.csv         # static (committed)
+│   ├── wksst9120.for.txt                     # CPC 주간 절대 SSTA (auto-fetch)
+│   ├── rel_wksst9120.txt                     # CPC 주간 relative SSTA (auto-fetch)
+│   ├── data.tar                              # PMEL TAO/TRITON Pacific buoy
+│   ├── data_p_clim_processed.tar.gz          # Pacific per-lon DOY clim (static, committed)
+│   ├── data_rama.tar                         # PMEL RAMA Indian buoy (Indian basin 시)
+│   └── data_rama_clim_processed.tar.gz       # Indian per-lon DOY clim (Indian basin 시)
+├── Output/                                   # 자동 생성 (gitignored, overwrite 매 실행)
+│   ├── SST/                                  # nino_*.csv, *.png, nino_report.md, .zip
+│   └── Subsurface/
+│       ├── Pacific/                          # pac_5_*.png, pac_5_data.csv, pac_5_plots.zip
+│       └── Indian/                           # ind_5_*.png, ind_5_data.csv, ind_iod_*, ind_5_plots.zip
+├── sst/run_pipeline.py                       # SST/rSSTA pipeline
+├── subsurface/
+│   ├── run_subsurface.py                     # --basin pacific|indian|both
+│   └── basin_config.py                       # Pacific/Indian config (격자·박스·weights)
+├── run_all.py                                # 두 파이프라인 일괄 실행 / runner for both
 ├── requirements.txt
-├── Design_SST.MD             # SST pipeline 설계 문서 / design doc
-└── Design_Subsurface.MD      # Subsurface pipeline 설계 문서
+├── Design_SST.MD                             # SST pipeline 설계 문서
+└── Design_Subsurface.MD                      # Subsurface pipeline 설계 문서
 ```
 
 ---
@@ -104,10 +110,11 @@ pip install -r requirements.txt
 
 | 파일 / File | 비고 / Note |
 |---|---|
-| `Input/nino_clim_daily_1991-2020.csv` | 4-box × 365일 climatology (1991–2020 기준) |
-| `Input/data_p_clim_processed.tar.gz` | per-longitude DOY climatology tarball |
+| `Input/nino_clim_daily_1991-2020.csv` | SST: 4-box × 365일 climatology (1991–2020 기준) |
+| `Input/data_p_clim_processed.tar.gz` | Pacific subsurface per-longitude DOY climatology |
+| `Input/data_rama_clim_processed.tar.gz` (있을 때) | Indian subsurface per-longitude DOY climatology |
 
-이 둘은 1991–2020 reference 기간에 의존하는 고정값이라 거의 변경 없음 — clone하면 그대로 사용 가능.
+이들은 1991–2020 reference 기간에 의존하는 고정값이라 거의 변경 없음 — clone하면 그대로 사용 가능.
 These are tied to the 1991–2020 reference period and rarely change — usable directly after clone.
 
 #### Auto-fetch (네트워크 자동 다운로드 / fetched automatically)
@@ -131,19 +138,29 @@ Place fresh copies before each run:
 | 파일 / File | 출처 / Source | 갱신 주기 |
 |---|---|---|
 | `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 (<https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/>) | 매일 |
-| `Input/data.tar` | PMEL TAO/TRITON `t<lat><n\|s><lon><e\|w>_dy.ascii.gz` 묶음 (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html>) | 매일 |
+| `Input/data.tar` | PMEL TAO/TRITON `t<lat><n\|s><lon><e\|w>_dy.ascii.gz` 묶음 (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html>) | 매일 (Pacific basin 사용 시) |
 | `Input/data_rama.tar` | PMEL RAMA (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-rama.html>) | 매일 (Indian basin 사용 시) |
 
 ### 7) 실행 / Run
 
 ```powershell
-python run_all.py              # SST + Subsurface 모두 / both
+# 전체 파이프라인
+python run_all.py              # SST + Subsurface(Pacific+Indian) 모두 / all
 python run_all.py sst          # SST만 / SST only
-python run_all.py subsurface   # Subsurface만 / Subsurface only
+python run_all.py subsurface   # Subsurface만 (두 basin 모두) / Subsurface only
+
+# Subsurface basin 선택
+python subsurface/run_subsurface.py --basin pacific   # Pacific만
+python subsurface/run_subsurface.py --basin indian    # Indian만
+python subsurface/run_subsurface.py --basin both      # 둘 다 (default)
 ```
 
-각 파이프라인은 시작 시 자기 출력 폴더(`Output/SST/` 또는 `Output/Subsurface/`)를 비우고 새로 작성합니다 (overwrite 정책).
-Each pipeline wipes its own output directory at start (overwrite policy).
+각 파이프라인은 시작 시 자기 출력 폴더를 비우고 새로 작성합니다 (overwrite 정책).
+Subsurface는 basin별로 `Output/Subsurface/Pacific/` 와 `Output/Subsurface/Indian/`로 분리.
+Each pipeline wipes its own output directory at start. Subsurface splits by basin.
+
+해당 basin의 raw tarball이 `Input/`에 없으면 그 basin은 자동 skip하고 다른 basin은 계속 진행 (예: `data_rama.tar` 없으면 Pacific만 처리).
+Missing a basin's raw tarball auto-skips that basin while the other still runs.
 
 ---
 
@@ -157,11 +174,21 @@ Each pipeline wipes its own output directory at start (overwrite policy).
 - `nino_report.md` — 자동 생성 markdown 보고서
 - `nino_analysis.zip` — 위 5개 묶음
 
-### Subsurface (`Output/Subsurface/`)
-- `pac_5_anomaly_YYYYMMDD.png` × 15 — 일별 anomaly 단면도
+### Subsurface — Pacific (`Output/Subsurface/Pacific/`)
+- `pac_5_anomaly_YYYYMMDD.png` × 15 — 일별 anomaly 단면도 (130°E–90°W, 0–350 m, ±5°)
 - `pac_5_absolute_YYYYMMDD.png` × 15 — 일별 absolute T 단면도
 - `pac_5_data.csv` — 일별 부이 T + climatology + anomaly
 - `pac_5_plots.zip` — 모든 PNG + CSV
+- 진단: 50–200 m anomaly 최댓값(Kelvin wave 동진), 28°C 동서폭(warm pool 경계)
+
+### Subsurface — Indian (`Output/Subsurface/Indian/`)
+- `ind_5_anomaly_YYYYMMDD.png` × 15 — 일별 anomaly 단면도 (40°E–100°E, 0–350 m, ±5°)
+- `ind_5_absolute_YYYYMMDD.png` × 15 — 일별 absolute T 단면도
+- `ind_5_data.csv` — 일별 부이 T + climatology + anomaly
+- `ind_iod_boxes.csv` — WTIO/SETIO surface SSTA box-mean (일별)
+- `ind_iod_timeseries.png` — DMI proxy(WTIO−SETIO) 15일 추이 + ±0.4/±1.0 °C 임계선
+- `ind_5_plots.zip` — 위 PNG + CSV 모두
+- 진단: WTIO/SETIO/DMI proxy, 적도 thermocline tilt(20°C isotherm at 60°E vs 90°E)
 
 자세한 설계는 [Design_SST.MD](Design_SST.MD), [Design_Subsurface.MD](Design_Subsurface.MD) 참조.
 See design docs for details.
@@ -188,8 +215,11 @@ python run_all.py
 ```
 `run_all.py`는 자식 프로세스에 자동으로 `PYTHONUTF8=1`을 넘겨주지만, venv 활성화 PowerShell에서 직접 스크립트를 돌릴 때는 위 환경변수를 설정.
 
-**`ERROR: Input/data.tar contains no subsurface temperature profile files`**
-PMEL에서 받은 tarball이 표면 SST(`sst*_dy.ascii`)만 들어 있음. **subsurface 프로파일** (`t*_dy.ascii`)이 들어 있는 tarball로 교체.
+**`[skip] data.tar (or data_rama.tar) has no subsurface T-profile files`**
+PMEL에서 받은 tarball이 표면 SST(`sst*_dy.ascii`)만 들어 있음. **subsurface 프로파일** (`t*_dy.ascii`)이 들어 있는 tarball로 교체. 한 basin이 skip돼도 다른 basin은 계속 진행됨.
+
+**`[skip] data_rama.tar not found in Input/`**
+Indian basin 입력이 없는 경우. Pacific만 돌리거나, RAMA tarball을 받아 `Input/data_rama.tar`로 배치.
 
 **`No such file or directory: '.../oisst-avhrr-v02r01.*.nc'`**
 `Input/oisst_data/`가 비었거나 파일명 패턴이 어긋남. NOAA OISST에서 일별 `.nc`를 받아 채워 넣을 것.

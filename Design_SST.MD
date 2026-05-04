@@ -28,12 +28,20 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
 
 모든 입력은 프로젝트 루트의 `Input/` 폴더에 위치한다:
 
-| File | Source | Role |
-|---|---|---|
-| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 | 일별 0.25° SST grid (preliminary 파일은 `_preliminary` 접미사) |
-| `Input/nino_clim_daily_1991-2020.csv` | setup 단계 산출 | 365일 × 4박스 climatology mean |
-| `Input/wksst9120.for.txt` | CPC `wksst9120.for` | 주간 절대 SST + 절대 SSTA (4박스) |
-| `Input/rel_wksst9120.txt` | CPC relative SSTA | 주간 relative SSTA (4박스, 열대평균 차감 기준) |
+| File | Source | Role | Fetch |
+|---|---|---|---|
+| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 | 일별 0.25° SST grid (preliminary 파일은 `_preliminary` 접미사) | 수동 |
+| `Input/nino_clim_daily_1991-2020.csv` | setup 단계 산출 | 365일 × 4박스 climatology mean | 수동 (1회, static) |
+| `Input/wksst9120.for.txt` | CPC `wksst9120.for` | 주간 절대 SST + 절대 SSTA (4박스) | **자동** (run_pipeline 시작 시) |
+| `Input/rel_wksst9120.txt` | CPC relative SSTA | 주간 relative SSTA (4박스, 열대평균 차감 기준) | **자동** (run_pipeline 시작 시) |
+
+### CPC 자동 fetch
+`run_pipeline.py`가 시작 시점(stage [0])에 다음 두 URL에서 매번 새로 받아 `Input/`에 덮어쓴다:
+- <https://cpc.ncep.noaa.gov/data/indices/wksst9120.for> → `Input/wksst9120.for.txt`
+- <https://cpc.ncep.noaa.gov/data/indices/rel_wksst9120.txt> → `Input/rel_wksst9120.txt`
+
+네트워크 실패 시 기존 로컬 파일이 있으면 그대로 사용 (warning), 둘 다 없으면 종료.
+`urllib.request` 표준 라이브러리만 사용 — 추가 의존성 없음.
 
 ### Niño box 정의 (Pacific, lon = 0–360)
 
@@ -51,6 +59,8 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
 전체 흐름:
 
 ```
+[0] CPC fetch (urllib) ──► Input/wksst9120.for.txt + rel_wksst9120.txt
+                                          │
 .nc files ──► [1] box-mean SST ──► [2] anomaly (vs clim) ──► [3] CPC bias 보정
                                                                     │
    CPC abs+rel SSTA ──► [4] tropical mean 역산 + 추세 외삽 ───────► [5] rSSTA
@@ -59,6 +69,12 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
                                                                     │
                           [7] 주별 집계 / [8] 플롯 / [9] 보고서 ◄──┘
 ```
+
+### [0] CPC 자동 fetch
+- 두 URL을 `urllib.request.urlopen`(timeout=20s)으로 받아 `Input/`에 덮어쓴다.
+- 네트워크 실패 + 로컬 파일 존재: 경고 후 진행. 네트워크 실패 + 로컬 파일 없음: 즉시 종료.
+- CPC 주간 bulletin은 매주 수요일경 갱신 (week_center가 일요일 기준 +3일).
+  매 실행마다 fresh로 받아 stale 데이터 위험 제거.
 
 ### [1] Box-mean SST (`xarray`)
 - 각 .nc 파일에서 `sst.squeeze()`로 단일 timestep 추출 (zlev 차원 제거)

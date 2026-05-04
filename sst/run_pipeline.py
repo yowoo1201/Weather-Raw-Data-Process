@@ -27,6 +27,32 @@ ABS_FILE  = str(INPUT_DIR / "wksst9120.for.txt")
 REL_FILE  = str(INPUT_DIR / "rel_wksst9120.txt")
 OUT_DIR   = str(OUT_DIR)
 
+# Auto-fetch latest CPC weekly SST bulletins. These files are appended to
+# weekly so we always pull fresh on each run; if the network is unreachable
+# we fall back to whatever is already on disk.
+import sys, urllib.request
+INPUT_DIR.mkdir(parents=True, exist_ok=True)
+_CPC_TARGETS = [
+    ("https://cpc.ncep.noaa.gov/data/indices/wksst9120.for", ABS_FILE),
+    ("https://cpc.ncep.noaa.gov/data/indices/rel_wksst9120.txt", REL_FILE),
+]
+print("[0] CPC 주간 SST bulletin 자동 fetch")
+for _url, _dest in _CPC_TARGETS:
+    try:
+        with urllib.request.urlopen(_url, timeout=20) as _r:
+            _data = _r.read()
+        with open(_dest, "wb") as _f:
+            _f.write(_data)
+        print(f"    ↓ {_url}\n      → {_dest}  ({len(_data)/1024:.0f} KB)")
+    except Exception as _e:
+        if os.path.exists(_dest):
+            print(f"    ! fetch failed ({_e}); using existing {_dest}",
+                  file=sys.stderr)
+        else:
+            print(f"    ! fetch failed ({_e}); no local fallback at {_dest}",
+                  file=sys.stderr)
+            raise
+
 # Overwrite semantics: wipe any prior contents of Output/SST/ so stale files
 # from previous runs (different date windows, different report content) don't
 # linger alongside fresh output. Preserve .gitkeep so the empty directory

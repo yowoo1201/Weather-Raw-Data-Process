@@ -49,13 +49,17 @@ BASIN_FORMS = {
 
 
 def _scrape_buoy_checkboxes(html: str) -> list[tuple[str, str]]:
-    """Pull every (name, value) pair from <input type=checkbox> in the form."""
+    """Pull every (name, value) pair from <input type=checkbox> in the form.
+
+    The value can contain '.' (e.g. RAMA's `0n80.5e`, `8.5s106.75e`), so we
+    capture any non-quote run rather than \\w+.
+    """
     out = []
     for c in re.findall(r"<input[^>]*type=\"?checkbox[^>]*>", html, re.I):
-        n = re.search(r"name\s*=\s*\"?([\w]+)", c, re.I)
-        v = re.search(r"value\s*=\s*\"?([\w]+)", c, re.I)
+        n = re.search(r"name\s*=\s*\"([^\"]+)\"", c, re.I)
+        v = re.search(r"value\s*=\s*\"([^\"]+)\"", c, re.I)
         if n and v:
-            out.append((n.group(1), v.group(1)))
+            out.append((n.group(1).strip(), v.group(1).strip()))
     return out
 
 

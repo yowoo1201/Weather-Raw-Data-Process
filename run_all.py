@@ -55,9 +55,25 @@ PIPELINES = {
 }
 
 
+def show_error_popup(title: str, message: str) -> None:
+    """Show a modal error dialog. Silent fallback if no GUI / tk available."""
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        messagebox.showerror(title, message, parent=root)
+        root.destroy()
+    except Exception:
+        pass
+
+
 def run(name: str, script: Path) -> int:
     if not script.exists():
-        print(f"[!] {name}: script not found at {script}", file=sys.stderr)
+        msg = f"script not found at {script}"
+        print(f"[!] {name}: {msg}", file=sys.stderr)
+        show_error_popup(f"{name} failed", msg)
         return 127
     print("=" * 70)
     print(f"▶  {name.upper()}  →  {script.relative_to(ROOT)}")
@@ -69,6 +85,13 @@ def run(name: str, script: Path) -> int:
     dt = time.time() - t0
     status = "OK" if rc == 0 else f"FAILED (exit {rc})"
     print(f"\n← {name}: {status}  ({dt:.1f}s)\n")
+    if rc != 0:
+        show_error_popup(
+            f"{name.upper()} pipeline failed",
+            f"Pipeline '{name}' exited with code {rc} after {dt:.1f}s.\n\n"
+            f"Script: {script.relative_to(ROOT)}\n\n"
+            f"Check the terminal for the traceback / error details.",
+        )
     return rc
 
 

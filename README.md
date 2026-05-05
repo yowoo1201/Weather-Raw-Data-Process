@@ -153,16 +153,24 @@ python sst/fetch_oisst.py --months 202604,202605   # 명시적으로
 날짜당 정확히 한 파일만 남도록 정리되어 SST 파이프라인이 중복 행을 만들지 않음.
 Result: exactly one file per date, no double-counting in the SST pipeline.
 
-#### Daily 데이터 — 직접 받아 넣을 것 / Daily — fetch manually
+#### Daily 데이터 — 모두 자동 fetch / Daily — all auto-fetched
 
-매 실행 전 최신 본을 다음 위치에 배치:
-Place fresh copies before each run:
-
-| 파일 / File | 출처 / Source | 갱신 주기 |
+| 파일 / File | 자동 단계 / Auto-fetched at | 출처 |
 |---|---|---|
-| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 (<https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/>) | 매일 |
-| `Input/data.tar` | PMEL TAO/TRITON `t<lat><n\|s><lon><e\|w>_dy.ascii.gz` 묶음 (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html>) | 매일 (Pacific basin 사용 시) |
-| `Input/data_rama.tar` | PMEL RAMA (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-rama.html>) | 매일 (Indian basin 사용 시) |
+| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | `sst/run_pipeline.py` stage [0b] | NOAA OISST v2.1 (<https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/>) |
+| `Input/data.tar` | `subsurface/run_subsurface.py` stage [0] (Pacific) | PMEL TAO/TRITON DDS form (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html>) |
+| `Input/data_rama.tar` | `subsurface/run_subsurface.py` stage [0] (Indian) | PMEL RAMA DDS form (<https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-rama.html>) |
+
+각 fetch는 네트워크 실패 시 기존 로컬 파일이 있으면 그걸 사용 (warn).
+Each fetch falls back to existing local file on network failure.
+
+수동 호출도 가능 (date range / basin 선택):
+Manual invocation:
+```powershell
+python sst/fetch_oisst.py --months 202604,202605
+python subsurface/fetch_pmel.py --basin pacific --start 2026-04-01 --end 2026-12-31
+python subsurface/fetch_pmel.py --basin indian
+```
 
 ### 7) 실행 / Run
 

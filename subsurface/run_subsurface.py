@@ -718,15 +718,30 @@ def aggregate_iod_boxes(raw: pd.DataFrame, clim_df: pd.DataFrame,
         if in_box.empty:
             continue
 
-        # Attach climatology + anomaly
+        # Attach climatology + anomaly. If no climatology was loaded
+        # (clim_lookup is an empty Series without a MultiIndex), fall back
+        # to in-period mean per (lon, depth) at this surface band.
+        have_clim_index = (
+            len(clim_lookup) > 0
+            and getattr(clim_lookup.index, "nlevels", 1) >= 3
+        )
+        if not have_clim_index and not in_box.empty:
+            inperiod = (in_box.groupby(["lon_key", "depth"])["T"]
+                        .mean().to_dict())
+        else:
+            inperiod = {}
+
         anoms = []
         for _, r in in_box.iterrows():
             lon, doy, dep, T = r["lon_key"], int(r["doy"]), float(r["depth"]), float(r["T"])
             tc = np.nan
-            try:
-                tc = float(clim_lookup.loc[(lon, doy, dep)])
-            except (KeyError, TypeError):
-                pass
+            if have_clim_index:
+                try:
+                    tc = float(clim_lookup.loc[(lon, doy, dep)])
+                except (KeyError, TypeError):
+                    pass
+            else:
+                tc = inperiod.get((lon, dep), np.nan)
             anoms.append(T - tc if not np.isnan(tc) else np.nan)
         in_box["anom"] = anoms
 
@@ -803,6 +818,21 @@ def run_basin(cfg: BasinConfig) -> int:
     # Output dir setup with overwrite (preserve .gitkeep)
     out_dir.mkdir(parents=True, exist_ok=True)
     _clear_dir(out_dir)
+
+    # Auto-fetch latest raw tarball from PMEL DDS. Network failure is
+    # non-fatal: we fall through and try to use whatever Input/<raw_tar>
+    # is already on disk.
+    print(f"=== [0] PMEL DDS auto-fetch ({cfg.raw_tar}) ===")
+    try:
+        import fetch_pmel
+        fetch_pmel.fetch_basin(cfg.name)
+    except Exception as e:
+        if raw_tar.exists():
+            print(f"   ! PMEL fetch failed ({e}); using existing {raw_tar.name}",
+                  file=sys.stderr)
+        else:
+            print(f"   ! PMEL fetch failed ({e}); no local fallback",
+                  file=sys.stderr)
 
     if not raw_tar.exists():
         print(f"   [skip] {cfg.raw_tar} not found in Input/", file=sys.stderr)

@@ -130,6 +130,29 @@ Auto-fetched at the start of `sst/run_pipeline.py`:
 네트워크 불가 + 기존 파일 존재 시 경고 후 기존 파일 사용. 둘 다 없으면 에러.
 Network failure + existing file → warn and reuse; otherwise hard fail.
 
+#### OISST 헬퍼 / OISST helper — `fetch_oisst.py`
+
+매일 OISST `.nc`를 받아 `Input/oisst_data/`를 최신 상태로 유지하는 보조 스크립트.
+Companion script that pulls the latest OISST `.nc` files into `Input/oisst_data/`.
+
+```powershell
+python fetch_oisst.py                       # 이번 달 + 지난 달 (default)
+python fetch_oisst.py --months 202604,202605  # 명시적으로
+```
+
+동작 / Behavior:
+- 로컬에 없는 날짜: 다운로드 (final 우선, 없으면 preliminary)
+- 로컬이 prelim뿐인데 remote에 final 있음: final 다운로드 + prelim 제거 (**overwrite preliminary by final**)
+- 로컬에 final + prelim 둘 다 있음: prelim 정리 (final이 우선)
+- 로컬이 이미 final: 스킵
+- Local missing → download (prefer final, else prelim)
+- Local prelim only, remote final available → fetch final and remove prelim
+- Local has both final + prelim → drop the prelim
+- Local already final → skip
+
+날짜당 정확히 한 파일만 남도록 정리되어 SST 파이프라인이 중복 행을 만들지 않음.
+Result: exactly one file per date, no double-counting in the SST pipeline.
+
 #### Daily 데이터 — 직접 받아 넣을 것 / Daily — fetch manually
 
 매 실행 전 최신 본을 다음 위치에 배치:

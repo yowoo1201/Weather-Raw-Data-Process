@@ -53,6 +53,22 @@ for _url, _dest in _CPC_TARGETS:
                   file=sys.stderr)
             raise
 
+# Auto-fetch newest OISST .nc files. Walks the current and previous
+# month directories on NCEI and reconciles each date's local file:
+#   - missing → download (final preferred, prelim if final not yet posted)
+#   - prelim only locally + final remote → download final, drop prelim
+#   - both final + prelim locally → drop prelim
+# Network failure here is non-fatal: we log and continue with whatever
+# .nc files are already in Input/oisst_data/.
+print("[0b] OISST .nc 자동 fetch (current+previous month)")
+try:
+    sys.path.insert(0, str(SCRIPT_DIR))
+    import fetch_oisst as _fo
+    _fo.fetch_months(_fo.default_months())
+except Exception as _e:
+    print(f"    ! OISST fetch skipped ({_e}); using existing local files",
+          file=sys.stderr)
+
 # Overwrite semantics: wipe any prior contents of Output/SST/ so stale files
 # from previous runs (different date windows, different report content) don't
 # linger alongside fresh output. Preserve .gitkeep so the empty directory

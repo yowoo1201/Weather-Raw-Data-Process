@@ -65,13 +65,8 @@ def default_months() -> list[str]:
     return [prev, cur]
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--months", default=",".join(default_months()),
-                    help="Comma-separated YYYYMM month dirs to walk")
-    args = ap.parse_args()
-    months = [m.strip() for m in args.months.split(",") if m.strip()]
-
+def fetch_months(months: list[str]) -> tuple[int, int, int]:
+    """Programmatic entry point. Returns (n_downloaded, n_bytes, n_removed)."""
     LOCAL.mkdir(parents=True, exist_ok=True)
 
     # Local index: {date: [filenames]}
@@ -150,6 +145,16 @@ def main():
 
     print(f"\n  done — downloaded {n_dl} files, "
           f"{n_bytes/1024/1024:.1f} MB, removed {n_removed} stale prelim")
+    return n_dl, n_bytes, n_removed
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--months", default=",".join(default_months()),
+                    help="Comma-separated YYYYMM month dirs to walk")
+    args = ap.parse_args()
+    months = [m.strip() for m in args.months.split(",") if m.strip()]
+    fetch_months(months)
 
 
 if __name__ == "__main__":

@@ -59,6 +59,7 @@ ANOM_CMAP   = "RdBu_r"
 ABS_LEVELS  = np.array([14, 16, 18, 20, 22, 24, 26, 28, 30])
 ABS_CMAP    = "turbo"
 ABS_UNDER_COLOR = "#0a1a3d"
+ABS_OVER_COLOR  = "#7a0000"   # deep red for T > 30°C (warmer than turbo top)
 
 
 # ────────────────────────────────────────────────────────────
@@ -500,9 +501,10 @@ def plot_single(date, A, T, tag, kind, cfg: BasinConfig,
     else:
         cmap   = mpl.colormaps.get_cmap(ABS_CMAP).copy()
         cmap.set_under(ABS_UNDER_COLOR)
+        cmap.set_over(ABS_OVER_COLOR)
         levels = ABS_LEVELS
         cb_label = "Temperature (°C)"; cb_ticks = ABS_LEVELS
-        extend = "min"
+        extend = "both"
     norm = mpl.colors.BoundaryNorm(levels, cmap.N, extend=extend)
 
     field = A if kind == "anomaly" else T
@@ -585,6 +587,9 @@ def plot_single(date, A, T, tag, kind, cfg: BasinConfig,
         if kind == "absolute":
             cb.ax.text(0.5, -0.08, "≤14 °C", transform=cb.ax.transAxes,
                        ha="center", va="top", fontsize=7, color=ABS_UNDER_COLOR,
+                       fontweight="bold")
+            cb.ax.text(0.5, 1.04, ">30 °C", transform=cb.ax.transAxes,
+                       ha="center", va="bottom", fontsize=7, color=ABS_OVER_COLOR,
                        fontweight="bold")
 
     fig.tight_layout()

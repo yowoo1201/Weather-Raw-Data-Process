@@ -51,14 +51,18 @@ PACIFIC = BasinConfig(
     prefix="pac_5",
     raw_tar="data.tar",
     clim_tar="data_p_clim_processed.tar.gz",
-    lon_grid=np.arange(130, 271, 2.0),    # 130°E → 90°W (lon360)
+    lon_grid=np.arange(137, 271, 2.0),    # 137°E → 90°W (lon360)
+                                          # Grid starts at 137°E because no
+                                          # in-band T-profile buoy west of 165°E
+                                          # (130°E buoys are 8°N+, out of band).
     depth_grid=np.arange(0, 351, 5.0),
     lat_band=(-5.0, 5.0),
     lat_weights_full={-5.0: 0.150, -2.0: 0.250, 0.0: 0.200,
                       2.0: 0.250, 5.0: 0.150},
     lat_weights_sparse={-5.0: 0.150, -2.0: 0.250, 0.0: 0.200,
                         2.0: 0.250, 5.0: 0.150},  # same as full for Pacific
-    extrap_lon_mask=15.0,
+    extrap_lon_mask=35.0,         # nearest-fills 137°E from westernmost
+                                  # in-band buoy at 165°E (~28° gap)
     extrap_depth_mask=40.0,
     overlay_boxes={
         "Niño 4":   (160, 210),

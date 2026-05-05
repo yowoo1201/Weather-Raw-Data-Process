@@ -59,7 +59,8 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
 전체 흐름:
 
 ```
-[0] CPC fetch (urllib) ──► Input/wksst9120.for.txt + rel_wksst9120.txt
+[0]  CPC fetch (urllib) ──► Input/wksst9120.for.txt + rel_wksst9120.txt
+[0b] OISST fetch (urllib) ─► Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc
                                           │
 .nc files ──► [1] box-mean SST ──► [2] anomaly (vs clim) ──► [3] CPC bias 보정
                                                                     │
@@ -75,6 +76,17 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
 - 네트워크 실패 + 로컬 파일 존재: 경고 후 진행. 네트워크 실패 + 로컬 파일 없음: 즉시 종료.
 - CPC 주간 bulletin은 매주 수요일경 갱신 (week_center가 일요일 기준 +3일).
   매 실행마다 fresh로 받아 stale 데이터 위험 제거.
+
+### [0b] OISST 자동 fetch [v1.001]
+- [sst/fetch_oisst.py](sst/fetch_oisst.py)의 `fetch_months()` 호출 — 이번 달 + 지난 달
+  NCEI 디렉터리 walk:
+  `https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/<YYYYMM>/`
+- 날짜별 best 버전 결정 (final 우선, 없으면 preliminary).
+- **Preliminary는 final로 자동 overwrite** — 로컬에 prelim만 있고 remote에 final 있으면
+  final 받고 prelim 삭제. 로컬에 final + prelim 둘 다 있으면 prelim 삭제 (final 보존).
+- 결과: 날짜당 정확히 1개 파일 → SST 분석 stage [1]에서 중복 행 없이 처리.
+- 네트워크 실패는 non-fatal — 기존 로컬 파일로 계속 진행.
+- 수동 호출도 가능: `python sst/fetch_oisst.py --months 202604,202605`
 
 ### [1] Box-mean SST (`xarray`)
 - 각 .nc 파일에서 `sst.squeeze()`로 단일 timestep 추출 (zlev 차원 제거)

@@ -118,6 +118,9 @@ Code/
 ## 4. Pipeline Stages
 
 ```
+[0] PMEL DDS form auto-fetch (urllib) ──► Input/data.tar  (Pacific)
+                                          Input/data_rama.tar (Indian)
+                                                  │
 Input/data.tar          ──► [1] extract  ──► [3] PMEL ASCII parse ──► [5] ±5° band weighted mean
 Input/data_rama.tar     ──► [1] extract  ──► [3] PMEL ASCII parse ──► [5] ±5° band weighted mean
                                                                                  │
@@ -133,6 +136,20 @@ Input/*rama_clim*.tar.gz► [1] extract ► [4] climatology load ─► [6] anom
                               [10] IOD box aggregation (Indian only) ◄─────────────┘
 ```
 
+### [0] PMEL DDS auto-fetch [v1.001]
+basin 처리 진입 직후 [subsurface/fetch_pmel.py](subsurface/fetch_pmel.py)가 자동 실행:
+- 각 basin form 페이지 GET
+  (Pacific: <https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-all.html>,
+  Indian:  <https://www.pmel.noaa.gov/tao/data_deliv/deliv-nojava-rama.html>)
+- 모든 `<input type="checkbox">`의 `(name, value)` 스크래핑 = "All" 버튼 효과
+- `cgi-tao/cover.cgi`에 form params 전송
+  (`P2=t` Subsurface Temp, `P3=dy` Daily, `P10=buoytar`, `P11=ascii`,
+  날짜 범위는 4월 1일 → 12월 31일 of current year, `P13=all`)
+- 응답 HTML에서 `/cache-tao/.../data.tar` 링크 파싱 → 다운로드 → `Input/data.tar` (또는 `data_rama.tar`)에 덮어쓰기
+- 네트워크 실패 시 기존 로컬 파일이 있으면 사용 (warn). 둘 다 없으면 basin skip.
+- **체크박스 value 정규식 주의**: 따옴표 기반 (`"([^"]+)"`). RAMA가 소수점 경도(`0n80.5e`, `1.5n67e`, `8.5s106.75e`)를 쓰는데
+  `[\w]+` 같은 패턴은 `.`을 못 잡아 12개 부이가 누락되어 CGI에 잘못된 값 전송 → tar에서 빠짐 (v1.001에서 수정).
+
 ### [1] Extraction
 - Pacific: `Input/data.tar` → `subsurface/pmel_data/pacific_now/`
 - Pacific clim: `Input/data_p_clim_processed.tar.gz` → `subsurface/pmel_data/pacific_clim/`
@@ -142,8 +159,9 @@ Input/*rama_clim*.tar.gz► [1] extract ► [4] climatology load ─► [6] anom
 
 ### [3] PMEL DDS ASCII parsing (raw)
 - 두 basin 동일 로직. 파일명에서 `(lat, lon360)` 추출.
-- **RAMA용 확장**: 소수점 경도 처리 (`80_5e` → 80.5°E). lat/lon 정규식을
-  `(\d+)(?:_(\d+))?([nsew])` 패턴으로 일반화.
+- **RAMA용 확장**: 소수점 경도 처리. 파일명은 `t0n80.5e_dy.ascii` (점) 또는
+  `t0n80_5e_dy.ascii` (언더스코어) 모두 가능. 정규식
+  `t(\d+)(?:[._](\d+))?([ns])(\d+)(?:[._](\d+))?([ew])_dy\.ascii`로 통합 처리.
 - 다중 블록(블록당 다른 depth set) 파싱.
 - Quality flag ≤ 3, T ∈ (-9, 40) 검증.
 - 출력: `time, latitude, longitude, depth, T, quality, date, lon_key, doy, basin`
@@ -191,10 +209,16 @@ Basin별 격자 (basin_config.py에 정의):
 
 | Param | Pacific | Indian |
 |---|---|---|
-| Longitude range | `np.arange(130, 271, 2.0)` | `np.arange(40, 101, 2.0)` |
+| Longitude range | `np.arange(137, 271, 2.0)` | `np.arange(40, 101, 2.0)` |
 | Depth range | `np.arange(0, 351, 5.0)` | `np.arange(0, 351, 5.0)` |
-| Far-extrapolation lon mask | 15° | **20°** (RAMA sparse) |
+| Far-extrapolation lon mask | **35°** (v1.001) | **20°** (RAMA sparse) |
 | Far-extrapolation depth mask | 40 m | 40 m |
+
+> **Pacific 그리드 137°E 시작 (v1.001)**: TAO/TRITON에서 ±5° 밴드 안의
+> 가장 서쪽 in-band 부이가 165°E. 130–137°E 부이는 모두 8°N 이상이라 밴드
+> 밖. 그리드 시작점을 130°E → 137°E로 당기고 extrap_lon_mask를 15° → 35°로
+> 늘려서 165°E 부이로부터 137°E까지 nearest-fill. v1.000 대비 latest-day
+> 커버리지 66% → 97%.
 
 - `scipy.interpolate.griddata` linear → 빈 영역은 nearest fill.
 - 마스크 임계 초과 지점은 NaN.
@@ -207,6 +231,8 @@ Basin별 격자 (basin_config.py에 정의):
 - **Anomaly**: ±5°C, `RdBu_r`, CPC 표준 비균등 레벨 `[-5,-4,-3,-2,-1,-0.5,0,0.5,1,2,3,4,5]`
 - **Absolute**: `turbo`, 2°C 간격 `[14,16,18,20,22,24,26,28,30]`
   - <14°C는 단일 navy(`#0a1a3d`) (set_under) — thermocline 구조 강조
+  - **>30°C는 단일 deep red(`#7a0000`)** (set_over, v1.001) — turbo 최상단보다
+    더 진한 빨강으로 처리해 표층 핫 스팟이 빈칸 안 되게. 컬러바에 `>30 °C` 라벨 표시.
 
 #### Isotherms (양쪽 basin 공통)
 - 18, 20, 22, 24, 26, 28, 30°C 라벨링
@@ -220,7 +246,7 @@ Basin별 격자 (basin_config.py에 정의):
 
 #### X축
 10° major tick, 자동으로 `°E`, `180°`, `°W` 라벨.
-- Pacific: 130°E ~ 90°W
+- Pacific: **137°E ~ 90°W** (v1.001, was 130°E)
 - Indian: **40°E ~ 100°E** (전부 °E)
 
 ### [9] CSV + zip

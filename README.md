@@ -4,6 +4,16 @@ ENSO·IOD 일별 모니터링 파이프라인 — OISST 표면 SST(rSSTA, ENSO) 
 
 ENSO/IOD daily monitoring pipelines — OISST surface SST (rSSTA, ENSO) + equatorial Pacific (TAO/TRITON) and equatorial Indian Ocean (RAMA) buoy subsurface cross-sections.
 
+## v1.001 — Automation 추가
+- **CPC 주간 bulletin 자동 fetch** (sst/run_pipeline 시작 시)
+- **OISST `.nc` 자동 fetch** (`sst/fetch_oisst.py`, 매 실행 시 호출, prelim → final 자동 교체)
+- **PMEL DDS 자동 fetch** (`subsurface/fetch_pmel.py`, Pacific TAO/TRITON + RAMA Indian
+  form 폼 자동 제출 + tar 다운로드)
+- 파이프라인 실패 시 **GUI 팝업** (`run_all.py`, tkinter messagebox)
+- RAMA 소수점 경도 부이 누락 버그 수정 (form checkbox value 정규식)
+- Pacific 그리드 130°E → 137°E + extrap_lon_mask 15° → 35° (서쪽 빈칸 제거)
+- Subsurface absolute 컬러맵에 `>30 °C` over color 추가
+
 ---
 
 ## 구성 / Structure
@@ -192,6 +202,11 @@ Each pipeline wipes its own output directory at start. Subsurface splits by basi
 
 해당 basin의 raw tarball이 `Input/`에 없으면 그 basin은 자동 skip하고 다른 basin은 계속 진행 (예: `data_rama.tar` 없으면 Pacific만 처리).
 Missing a basin's raw tarball auto-skips that basin while the other still runs.
+
+**실패 시 팝업** — 파이프라인이 비정상 종료(exit code != 0)하면 `run_all.py`가 tkinter 모달을
+띄움. 터미널을 안 보고 있어도 즉시 알 수 있도록.
+**Failure popup** — `run_all.py` shows a topmost tkinter messagebox if any
+pipeline exits non-zero, so failures are visible without watching the terminal.
 
 ---
 

@@ -130,14 +130,14 @@ Auto-fetched at the start of `sst/run_pipeline.py`:
 네트워크 불가 + 기존 파일 존재 시 경고 후 기존 파일 사용. 둘 다 없으면 에러.
 Network failure + existing file → warn and reuse; otherwise hard fail.
 
-#### OISST 헬퍼 / OISST helper — `fetch_oisst.py`
+#### OISST 헬퍼 / OISST helper — `sst/fetch_oisst.py`
 
 매일 OISST `.nc`를 받아 `Input/oisst_data/`를 최신 상태로 유지하는 보조 스크립트.
 Companion script that pulls the latest OISST `.nc` files into `Input/oisst_data/`.
 
 ```powershell
-python fetch_oisst.py                       # 이번 달 + 지난 달 (default)
-python fetch_oisst.py --months 202604,202605  # 명시적으로
+python sst/fetch_oisst.py                          # 이번 달 + 지난 달 (default)
+python sst/fetch_oisst.py --months 202604,202605   # 명시적으로
 ```
 
 동작 / Behavior:

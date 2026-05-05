@@ -20,7 +20,8 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT = SCRIPT_DIR.parent
 LOCAL = ROOT / "Input" / "oisst_data"
 
 BASE = ("https://www.ncei.noaa.gov/data/sea-surface-temperature-"

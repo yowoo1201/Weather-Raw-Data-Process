@@ -20,12 +20,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 ROOT_DIR   = SCRIPT_DIR.parent
 INPUT_DIR  = ROOT_DIR / "Input"
 OUT_DIR    = ROOT_DIR / "Output" / "SST"
+CSV_DIR    = ROOT_DIR / "Output"          # CSVs land here (flat, not in subfolder)
 
 NC_DIR    = str(INPUT_DIR / "oisst_data")
 CLIM_FILE = str(INPUT_DIR / "nino_clim_daily_1991-2020.csv")
 ABS_FILE  = str(INPUT_DIR / "wksst9120.for.txt")
 REL_FILE  = str(INPUT_DIR / "rel_wksst9120.txt")
 OUT_DIR   = str(OUT_DIR)
+CSV_DIR   = str(CSV_DIR)
 
 # Auto-fetch latest CPC weekly SST bulletins. These files are appended to
 # weekly so we always pull fresh on each run; if the network is unreachable
@@ -269,8 +271,8 @@ df['grad_4_3_anom']    = df['grad_4_minus_3']   - df['grad_4_3_clim']
 df['grad_34_12_anom']  = df['grad_34_minus_12'] - df['grad_34_12_clim']
 df['grad_4_34_anom']   = df['grad_4_minus_34']  - df['grad_4_34_clim']
 
-df.to_csv(f'{OUT_DIR}/nino_rssta_daily.csv', index=False)
-print(f"    -> {OUT_DIR}/nino_rssta_daily.csv 저장")
+df.to_csv(f'{CSV_DIR}/nino_rssta_daily.csv', index=False)
+print(f"    -> {CSV_DIR}/nino_rssta_daily.csv 저장")
 
 print("[5] 주별 평균 계산 (일~토)")
 def week_start_sun(d):
@@ -291,8 +293,8 @@ agg['grad_4_12_anom'] = ('grad_4_12_anom','mean')
 weekly = df.groupby('week_start').agg(**agg).reset_index()
 weekly = weekly.merge(rel.rename(columns={'week_center':'week_center'}),
                      on='week_center', how='left')
-weekly.to_csv(f'{OUT_DIR}/nino_rssta_weekly.csv', index=False)
-print(f"    -> {OUT_DIR}/nino_rssta_weekly.csv 저장")
+weekly.to_csv(f'{CSV_DIR}/nino_rssta_weekly.csv', index=False)
+print(f"    -> {CSV_DIR}/nino_rssta_weekly.csv 저장")
 
 print("[6] 플롯 생성")
 rel_recent = rel.rename(columns={'week_center':'date'})
@@ -526,15 +528,77 @@ with open(f'{OUT_DIR}/nino_report.md', 'w', encoding='utf-8') as f:
     f.write(report)
 print(f"    -> {OUT_DIR}/nino_report.md 저장")
 
+# ────── [8] Indo-Pacific 격자 SST CSV (latest day only, ±0.5° mean) ──────
+# Western Pacific + Indian Ocean, lat -10° to +10°. Each output cell is the
+# mean of OISST values within a ±0.5° box around the cell center, i.e. a
+# 1°×1° grid sampled on integer lat/lon points (lat: -10..10, lon: 30..180).
+# Single-snapshot for the most recent date.
+print("[8] Indo-Pacific 격자 SST CSV (최근 1일, ±0.5° 평균)")
+INDO_PACIFIC_LAT = (-10.0, 10.0)
+INDO_PACIFIC_LON = (30.0, 180.0)
+HALF_BOX = 0.5  # ±0.5° → 1°×1° cell centred on integer lat/lon
+nc_files = sorted(glob.glob(f'{NC_DIR}/oisst-avhrr-v02r01.*.nc'))
+if not nc_files:
+    print("    -> .nc 파일 없음, skip")
+else:
+    latest_nc = nc_files[-1]
+    latest_date = pd.to_datetime(re.search(r'(\d{8})', latest_nc).group(1))
+    ds_latest = xr.open_dataset(latest_nc)
+    sst_latest = ds_latest.sst.squeeze()
+    if 'zlev' in sst_latest.dims:
+        sst_latest = sst_latest.squeeze('zlev')
+    # ±0.5° box mean per integer (lat, lon) cell. cos(lat)-weighted so
+    # the box mean reflects equal-area averaging.
+    rows = []
+    lat_centers = np.arange(INDO_PACIFIC_LAT[0], INDO_PACIFIC_LAT[1] + 1, 1.0)
+    lon_centers = np.arange(INDO_PACIFIC_LON[0], INDO_PACIFIC_LON[1] + 1, 1.0)
+    for lat_c in lat_centers:
+        for lon_c in lon_centers:
+            sub = sst_latest.sel(
+                lat=slice(lat_c - HALF_BOX, lat_c + HALF_BOX),
+                lon=slice(lon_c - HALF_BOX, lon_c + HALF_BOX),
+            )
+            if sub.size == 0:
+                continue
+            w = np.cos(np.deg2rad(sub.lat))
+            try:
+                val = float(sub.weighted(w).mean(('lat', 'lon')).values)
+            except Exception:
+                val = float('nan')
+            if not np.isnan(val):
+                rows.append({'lat': lat_c, 'lon': lon_c, 'sst': val})
+    grid_df = pd.DataFrame(rows)
+    grid_df.insert(0, 'date', latest_date.strftime('%Y-%m-%d'))
+    grid_csv = f'{CSV_DIR}/sst_grid_indo_pacific.csv'
+    grid_df.to_csv(grid_csv, index=False, float_format='%.3f')
+    ds_latest.close()
+    print(f"    -> {grid_csv}  ({len(grid_df):,} rows, "
+          f"{grid_df['lat'].nunique()} lats × {grid_df['lon'].nunique()} lons, "
+          f"date={latest_date.date()})")
+
 print("\n" + "="*60)
 print(f"완료: 분석 기간 {df.date.min().strftime('%Y-%m-%d')} ~ {df.date.max().strftime('%Y-%m-%d')}")
 print("="*60)
 print(report)
 
 try:
-    import shutil
-    zip_base = str(Path(OUT_DIR) / 'nino_analysis')
-    shutil.make_archive(zip_base, 'zip', OUT_DIR)
-    print(f"\n-> {zip_base}.zip 생성 완료")
+    import zipfile
+    zip_path = Path(OUT_DIR) / 'nino_analysis.zip'
+    csv_extras = [
+        Path(CSV_DIR) / 'nino_rssta_daily.csv',
+        Path(CSV_DIR) / 'nino_rssta_weekly.csv',
+        Path(CSV_DIR) / 'sst_grid_indo_pacific.csv',
+    ]
+    with zipfile.ZipFile(zip_path, 'w',
+                          compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        # Everything that lives in OUT_DIR (plots, report.md)
+        for f in Path(OUT_DIR).iterdir():
+            if f.is_file() and f.name not in ('.gitkeep', 'nino_analysis.zip'):
+                zf.write(f, arcname=f.name)
+        # Plus the CSVs that now live in Output/ root
+        for f in csv_extras:
+            if f.exists():
+                zf.write(f, arcname=f.name)
+    print(f"\n-> {zip_path} 생성 완료")
 except Exception as e:
     print(f"\nzip 생성 실패: {e}")

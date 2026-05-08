@@ -212,28 +212,32 @@ pipeline exits non-zero, so failures are visible without watching the terminal.
 
 ## 산출물 / Outputs
 
-### SST (`Output/SST/`)
+### CSV files (`Output/` 루트 / flat) — v1.002
 - `nino_rssta_daily.csv` — 일별 4-box rSSTA + 동서경사
 - `nino_rssta_weekly.csv` — 주별 평균 + CPC 검증
+- `sst_grid_indo_pacific.csv` — 인도-태평양 격자 SST (lat -10~10°, lon 30°E~180°,
+  1°×1° 격자, 각 셀 ±0.5° cos(lat)-가중 평균, **최근 1일만**)
+- `pac_5_data.csv` — Pacific 부이 raw + climatology + anomaly (모든 위도; ±5° 밖은 최근일만)
+- `ind_5_data.csv` — Indian 부이 동일 정책
+- `ind_iod_boxes.csv` — WTIO/SETIO surface SSTA box-mean (일별, Indian만)
+
+### SST (`Output/SST/`)
 - `nino_rssta_plot.png` — 4-panel 시계열
 - `nino_gradients_plot.png` — 동서 경사 + climatology 비교
 - `nino_report.md` — 자동 생성 markdown 보고서
-- `nino_analysis.zip` — 위 5개 묶음
+- `nino_analysis.zip` — 위 5개 묶음 (CSV 3개 포함)
 
 ### Subsurface — Pacific (`Output/Subsurface/Pacific/`)
-- `pac_5_anomaly_YYYYMMDD.png` × 15 — 일별 anomaly 단면도 (130°E–90°W, 0–350 m, ±5°)
+- `pac_5_anomaly_YYYYMMDD.png` × 15 — 일별 anomaly 단면도 (137°E–90°W, 0–350 m, ±5°)
 - `pac_5_absolute_YYYYMMDD.png` × 15 — 일별 absolute T 단면도
-- `pac_5_data.csv` — 일별 부이 T + climatology + anomaly
-- `pac_5_plots.zip` — 모든 PNG + CSV
+- `pac_5_plots.zip` — 모든 PNG + CSV 사본
 - 진단: 50–200 m anomaly 최댓값(Kelvin wave 동진), 28°C 동서폭(warm pool 경계)
 
 ### Subsurface — Indian (`Output/Subsurface/Indian/`)
 - `ind_5_anomaly_YYYYMMDD.png` × 15 — 일별 anomaly 단면도 (40°E–100°E, 0–350 m, ±5°)
 - `ind_5_absolute_YYYYMMDD.png` × 15 — 일별 absolute T 단면도
-- `ind_5_data.csv` — 일별 부이 T + climatology + anomaly
-- `ind_iod_boxes.csv` — WTIO/SETIO surface SSTA box-mean (일별)
 - `ind_iod_timeseries.png` — DMI proxy(WTIO−SETIO) 15일 추이 + ±0.4/±1.0 °C 임계선
-- `ind_5_plots.zip` — 위 PNG + CSV 모두
+- `ind_5_plots.zip` — 모든 PNG + CSV 사본
 - 진단: WTIO/SETIO/DMI proxy, 적도 thermocline tilt(20°C isotherm at 60°E vs 90°E)
 
 자세한 설계는 [Design_SST.MD](Design_SST.MD), [Design_Subsurface.MD](Design_Subsurface.MD) 참조.

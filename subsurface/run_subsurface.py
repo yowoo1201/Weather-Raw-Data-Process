@@ -914,6 +914,9 @@ def run_basin(cfg: BasinConfig) -> int:
     print("\n=== [6] Anomaly attachment ===")
     band_df, baseline = attach_anomaly(band_df, clim_df, use_clim=True)
     print(f"   {baseline}")
+    # Also attach anomaly to the raw per-buoy frame so the CSV can carry
+    # every buoy/lat (not just the ±5° band-averaged rows the plots use).
+    raw_with_anom, _ = attach_anomaly(raw, clim_df, use_clim=True)
 
     print("\n=== [7] Section interpolation ===")
     sections = assemble_daily(
@@ -949,7 +952,9 @@ def run_basin(cfg: BasinConfig) -> int:
         print("\n=== [10] IOD box aggregation (WTIO / SETIO) ===")
         iod_df = aggregate_iod_boxes(raw, clim_df, cfg, dates)
         if not iod_df.empty:
-            iod_csv = out_dir / f"{cfg.name[:3]}_iod_boxes.csv"
+            # CSV goes to Output/ root (per user request); PNG stays with the
+            # rest of the basin's PNGs in Output/Subsurface/Indian/.
+            iod_csv = SUBSURFACE_OUT.parent / f"{cfg.name[:3]}_iod_boxes.csv"
             iod_df.to_csv(iod_csv, index=False, float_format="%.3f")
             print(f"   CSV: {iod_csv.name}  ({len(iod_df)} rows)")
             iod_png = out_dir / f"{cfg.name[:3]}_iod_timeseries.png"
@@ -964,7 +969,7 @@ def run_basin(cfg: BasinConfig) -> int:
         print_indian_diagnostics(sections, cfg, iod_df)
 
     print("\n=== [9] Write CSV + zip ===")
-    write_outputs(band_df, generated, out_dir, cfg.prefix,
+    write_outputs(raw_with_anom, generated, out_dir, cfg.prefix, cfg,
                   extra_files=[p for p in (iod_csv, iod_png) if p])
     print(f"\n✓ {cfg.name}: outputs in {out_dir}")
     return 0
@@ -981,27 +986,47 @@ def lon_human(x):
     return f"{int(round(x))}E"
 
 
-def write_outputs(band_df, generated_pngs, out_dir: Path, prefix: str,
-                  extra_files=None):
-    csv_path = out_dir / f"{prefix}_data.csv"
-    df_out = band_df[[
-        "date", "lon_key", "depth", "doy", "T", "T_clim", "anom", "n_lats", "latitude"
+def write_outputs(raw_with_anom, generated_pngs, out_dir: Path, prefix: str,
+                  cfg, extra_files=None):
+    """Write per-buoy CSV + zip.
+
+    The plots remain band-averaged. The CSV carries every buoy/lat/lon
+    record so downstream users can see beyond the ±5° band, with one
+    twist: rows from buoys *outside* the ±5° band (i.e. data that the
+    PNG plots don't use) are restricted to the most recent date only.
+    Rows from in-band buoys keep the full 15-day window.
+    """
+    # CSV goes to Output/ root (per user request); PNGs/zip stay in out_dir.
+    csv_path = out_dir.parent.parent / f"{prefix}_data.csv"
+    df_out = raw_with_anom[[
+        "date", "latitude", "lon_key", "depth", "doy",
+        "T", "T_clim", "anom", "quality"
     ]].copy()
     df_out = df_out.rename(columns={
-        "lon_key":  "longitude",
-        "T":        "T_observed",
-        "T_clim":   "T_climatology",
-        "anom":     "anomaly",
-        "latitude": "mean_lat_used",
+        "lon_key": "longitude",
+        "T":       "T_observed",
+        "T_clim":  "T_climatology",
+        "anom":    "anomaly",
     })
     df_out["lon_label"] = df_out["longitude"].apply(lon_human)
-    df_out = df_out[["date", "longitude", "lon_label", "depth", "doy",
-                     "T_observed", "T_climatology", "anomaly",
-                     "n_lats", "mean_lat_used"]]
-    df_out = df_out.sort_values(["date", "longitude", "depth"]).reset_index(drop=True)
+    df_out = df_out[["date", "latitude", "longitude", "lon_label", "depth", "doy",
+                     "T_observed", "T_climatology", "anomaly", "quality"]]
+
+    # Restrict out-of-band rows to the most recent date only.
+    lo, hi = cfg.lat_band
+    in_band = df_out["latitude"].between(lo, hi)
+    most_recent = df_out["date"].max()
+    keep = in_band | (df_out["date"] == most_recent)
+    n_dropped = (~keep).sum()
+    df_out = df_out[keep]
+
+    df_out = df_out.sort_values(
+        ["date", "latitude", "longitude", "depth"]).reset_index(drop=True)
     df_out.to_csv(csv_path, index=False, float_format="%.3f")
     print(f"   CSV: {csv_path.name}  "
-          f"({csv_path.stat().st_size / 1024:.0f} KB, {len(df_out):,} rows)")
+          f"({csv_path.stat().st_size / 1024:.0f} KB, {len(df_out):,} rows, "
+          f"{df_out['latitude'].nunique()} lats × {df_out['longitude'].nunique()} lons; "
+          f"dropped {n_dropped} stale out-of-band rows)")
 
     zip_path = out_dir / f"{prefix}_plots.zip"
     print(f"   ZIP: {zip_path.name}")

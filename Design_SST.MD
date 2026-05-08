@@ -180,17 +180,26 @@ rSSTA[r,d] = anom_corrected[r,d] - tropical_mean_ssta[d]
 
 ## 4. Outputs
 
-모든 산출물은 `Output/SST/` 아래에 작성된다:
+```
+Output/
+├── nino_rssta_daily.csv          # 일별 전체 (anomaly, anomaly_corrected, rSSTA, gradient)
+├── nino_rssta_weekly.csv         # 주별 평균 + CPC relative SSTA join
+├── sst_grid_indo_pacific.csv     # Indo-Pacific 격자 SST 스냅샷 (최근 1일)  [v1.002]
+└── SST/
+    ├── nino_rssta_plot.png       # 4-panel rSSTA 시계열
+    ├── nino_gradients_plot.png   # 2-panel 동서 경사
+    ├── nino_report.md            # markdown 보고서
+    └── nino_analysis.zip         # 위 6개 묶음 (CSV 3 + PNG 2 + MD 1)
+```
 
-```
-Output/SST/
-├── nino_rssta_daily.csv       # 일별 전체 (anomaly, anomaly_corrected, rSSTA, gradient들)
-├── nino_rssta_weekly.csv      # 주별 평균 + CPC relative SSTA join
-├── nino_rssta_plot.png        # 4-panel rSSTA 시계열
-├── nino_gradients_plot.png    # 2-panel 동서 경사
-├── nino_report.md             # markdown 보고서
-└── nino_analysis.zip          # 위 5개 파일 묶음
-```
+**CSV는 모두 `Output/` 루트에** (v1.002, sub폴더에 넣지 않음).
+PNG/MD/ZIP은 기존대로 `Output/SST/`에 유지.
+
+### `sst_grid_indo_pacific.csv` (v1.002)
+- 적도 인도양 ~ 서태평양 (`lat ∈ [-10, 10]`, `lon ∈ [30°E, 180°]`) 격자 SST 스냅샷.
+- 1°×1° 격자 (각 정수 lat/lon 셀에서 ±0.5° 윈도우 cos(lat)-가중 평균).
+- **최근 1일만** — 시계열 데이터는 `nino_rssta_*.csv`에 별도 보관.
+- 컬럼: `date, lat, lon, sst`. 약 21 lats × 142 lons ≈ 2,800 행 (NaN 셀 제외).
 
 ### Directory layout (프로젝트 루트 기준)
 

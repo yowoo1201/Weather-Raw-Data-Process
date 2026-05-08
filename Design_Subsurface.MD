@@ -250,9 +250,16 @@ Basin별 격자 (basin_config.py에 정의):
 - Indian: **40°E ~ 100°E** (전부 °E)
 
 ### [9] CSV + zip
-- Basin별로 `<prefix>_data.csv` + `<prefix>_plots.zip` 생성.
+- Basin별로 `<prefix>_data.csv` (Output/ 루트) + `<prefix>_plots.zip` (basin 서브폴더) 생성.
 - Prefix: Pacific=`pac_5`, Indian=`ind_5`.
-- ZIP: 30 PNG (15일 × 2종) + CSV, ZIP_DEFLATED level 9.
+- **CSV 내용** (v1.002):
+  - 밴드 평균이 아닌 **per-buoy raw 관측 + climatology + anomaly** (모든 위도 포함).
+    Plot은 ±5° 밴드만 쓰지만 CSV는 모든 부이를 커버.
+  - 컬럼: `date, latitude, longitude, lon_label, depth, doy,
+    T_observed, T_climatology, anomaly, quality`
+  - **±5° 밴드 밖 부이는 최근 날짜만 포함** (plot에 직접 안 쓰는 데이터는 stale 행
+    누적을 막기 위해 가장 최근 day만 보존). 밴드 안 부이는 15일 윈도우 전체.
+- ZIP: 30 PNG (15일 × 2종) + CSV (참조 추가), ZIP_DEFLATED level 9.
 
 ### [10] IOD box aggregation (Indian only) [신규]
 ±5° 밴드 산출물과 별개로, raw row 데이터(밴드화 전)에서 IOD-relevant box 평균을 따로 산출.
@@ -281,20 +288,24 @@ Basin별 격자 (basin_config.py에 정의):
 ## 5. Outputs
 
 ```
-Output/Subsurface/
-├── Pacific/
-│   ├── pac_5_anomaly_YYYYMMDD.png   × 15
-│   ├── pac_5_absolute_YYYYMMDD.png  × 15
-│   ├── pac_5_data.csv
-│   └── pac_5_plots.zip
-└── Indian/
-    ├── ind_5_anomaly_YYYYMMDD.png   × 15
-    ├── ind_5_absolute_YYYYMMDD.png  × 15
-    ├── ind_5_data.csv
-    ├── ind_iod_boxes.csv            (WTIO/SETIO/DMI 15일 일별)
-    ├── ind_iod_timeseries.png       (DMI 추이 + threshold lines)
-    └── ind_5_plots.zip              (PNG×30 + CSV + IOD CSV/PNG)
+Output/
+├── pac_5_data.csv             ← per-buoy CSV (모든 위도, 밴드 밖은 최근일만)
+├── ind_5_data.csv             ← per-buoy CSV (Indian 동일 정책)
+├── ind_iod_boxes.csv          ← WTIO/SETIO/DMI 15일 일별 (Indian만)
+└── Subsurface/
+    ├── Pacific/
+    │   ├── pac_5_anomaly_YYYYMMDD.png   × 15
+    │   ├── pac_5_absolute_YYYYMMDD.png  × 15
+    │   └── pac_5_plots.zip              (PNG×30 + CSV 사본)
+    └── Indian/
+        ├── ind_5_anomaly_YYYYMMDD.png   × 15
+        ├── ind_5_absolute_YYYYMMDD.png  × 15
+        ├── ind_iod_timeseries.png       (DMI 추이 + threshold lines)
+        └── ind_5_plots.zip              (PNG×30 + CSV + IOD CSV/PNG 사본)
 ```
+
+**CSV는 모두 `Output/` 루트에 평탄하게** (v1.002, sub폴더에 넣지 않음).
+PNG/MD/ZIP은 기존대로 basin별 서브폴더에 유지.
 
 ---
 

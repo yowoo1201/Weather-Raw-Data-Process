@@ -217,8 +217,8 @@ pipeline exits non-zero, so failures are visible without watching the terminal.
 - `nino_rssta_weekly.csv` — 주별 평균 + CPC 검증
 - `sst_grid_indo_pacific.csv` — 인도-태평양 격자 SST (lat -10~10°, lon 30°E~180°,
   1°×1° 격자, 각 셀 ±0.5° cos(lat)-가중 평균, **최근 1일만**)
-- `pac_5_data.csv` — Pacific 부이 raw + climatology + anomaly (모든 위도; ±5° 밖은 최근일만)
-- `ind_5_data.csv` — Indian 부이 동일 정책
+- `pac_5_data.csv` — Pacific 부이 raw + climatology + anomaly (모든 위도, **최근 1일 스냅샷**)
+- `ind_5_data.csv` — Indian 부이 동일 정책 (최근 1일 스냅샷)
 - `ind_iod_boxes.csv` — WTIO/SETIO surface SSTA box-mean (일별, Indian만)
 
 ### SST (`Output/SST/`)

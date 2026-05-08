@@ -988,13 +988,11 @@ def lon_human(x):
 
 def write_outputs(raw_with_anom, generated_pngs, out_dir: Path, prefix: str,
                   cfg, extra_files=None):
-    """Write per-buoy CSV + zip.
+    """Write per-buoy CSV (most-recent-date snapshot) + zip.
 
-    The plots remain band-averaged. The CSV carries every buoy/lat/lon
-    record so downstream users can see beyond the ±5° band, with one
-    twist: rows from buoys *outside* the ±5° band (i.e. data that the
-    PNG plots don't use) are restricted to the most recent date only.
-    Rows from in-band buoys keep the full 15-day window.
+    The plots remain a 15-day band-averaged section. The CSV carries
+    every buoy / lat / lon / depth record but **only for the most recent
+    date** — single-day snapshot. Daily history lives in the PNGs.
     """
     # CSV goes to Output/ root (per user request); PNGs/zip stay in out_dir.
     csv_path = out_dir.parent.parent / f"{prefix}_data.csv"
@@ -1012,21 +1010,20 @@ def write_outputs(raw_with_anom, generated_pngs, out_dir: Path, prefix: str,
     df_out = df_out[["date", "latitude", "longitude", "lon_label", "depth", "doy",
                      "T_observed", "T_climatology", "anomaly", "quality"]]
 
-    # Restrict out-of-band rows to the most recent date only.
-    lo, hi = cfg.lat_band
-    in_band = df_out["latitude"].between(lo, hi)
+    # Keep only the most recent date — every buoy, every depth, single-day
+    # snapshot. The 15-day history lives in the PNG sections.
     most_recent = df_out["date"].max()
-    keep = in_band | (df_out["date"] == most_recent)
-    n_dropped = (~keep).sum()
-    df_out = df_out[keep]
+    n_dropped = (df_out["date"] != most_recent).sum()
+    df_out = df_out[df_out["date"] == most_recent]
 
     df_out = df_out.sort_values(
-        ["date", "latitude", "longitude", "depth"]).reset_index(drop=True)
+        ["latitude", "longitude", "depth"]).reset_index(drop=True)
     df_out.to_csv(csv_path, index=False, float_format="%.3f")
     print(f"   CSV: {csv_path.name}  "
           f"({csv_path.stat().st_size / 1024:.0f} KB, {len(df_out):,} rows, "
+          f"date={most_recent.date()}, "
           f"{df_out['latitude'].nunique()} lats × {df_out['longitude'].nunique()} lons; "
-          f"dropped {n_dropped} stale out-of-band rows)")
+          f"dropped {n_dropped} earlier-date rows)")
 
     zip_path = out_dir / f"{prefix}_plots.zip"
     print(f"   ZIP: {zip_path.name}")

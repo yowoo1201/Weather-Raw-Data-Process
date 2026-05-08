@@ -257,8 +257,8 @@ Basin별 격자 (basin_config.py에 정의):
     Plot은 ±5° 밴드만 쓰지만 CSV는 모든 부이를 커버.
   - 컬럼: `date, latitude, longitude, lon_label, depth, doy,
     T_observed, T_climatology, anomaly, quality`
-  - **±5° 밴드 밖 부이는 최근 날짜만 포함** (plot에 직접 안 쓰는 데이터는 stale 행
-    누적을 막기 위해 가장 최근 day만 보존). 밴드 안 부이는 15일 윈도우 전체.
+  - **최근 1일 스냅샷만** — 윈도우 전체(15일) 시계열은 PNG에서 보고, CSV는 모든
+    부이의 단일 날짜 단면도로만 한정.
 - ZIP: 30 PNG (15일 × 2종) + CSV (참조 추가), ZIP_DEFLATED level 9.
 
 ### [10] IOD box aggregation (Indian only) [신규]
@@ -289,8 +289,8 @@ Basin별 격자 (basin_config.py에 정의):
 
 ```
 Output/
-├── pac_5_data.csv             ← per-buoy CSV (모든 위도, 밴드 밖은 최근일만)
-├── ind_5_data.csv             ← per-buoy CSV (Indian 동일 정책)
+├── pac_5_data.csv             ← per-buoy 최근 1일 스냅샷 (모든 위도/경도/깊이)
+├── ind_5_data.csv             ← per-buoy 최근 1일 스냅샷 (Indian 동일)
 ├── ind_iod_boxes.csv          ← WTIO/SETIO/DMI 15일 일별 (Indian만)
 └── Subsurface/
     ├── Pacific/

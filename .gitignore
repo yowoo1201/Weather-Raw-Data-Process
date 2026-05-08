@@ -30,6 +30,7 @@ Input/*
 !Input/data_p_clim_processed.tar.gz
 
 # Generated outputs (regenerable from Input/ via run_all.py)
+Output/*.csv
 Output/SST/*
 Output/Subsurface/Pacific/*
 Output/Subsurface/Indian/*

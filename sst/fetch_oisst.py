@@ -56,13 +56,23 @@ def fetch(month: str, name: str) -> int:
 
 
 def default_months() -> list[str]:
+    """Current month plus the two preceding months.
+
+    Three-month window so the monthly comparison block in run_pipeline.py
+    has at least two prior full months (plus the running current month) to
+    line up against CPC's monthly bulletins. Extend with --months
+    YYYYMM,... to backfill further history.
+    """
     today = date.today()
-    cur = f"{today.year}{today.month:02d}"
-    if today.month == 1:
-        prev = f"{today.year - 1}12"
-    else:
-        prev = f"{today.year}{today.month - 1:02d}"
-    return [prev, cur]
+    months: list[str] = []
+    y, m = today.year, today.month
+    for _ in range(3):
+        months.append(f"{y}{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    return list(reversed(months))
 
 
 def fetch_months(months: list[str]) -> tuple[int, int, int]:

@@ -1,9 +1,9 @@
-# SST/rSSTA Daily Pipeline — Design Document
+# SST/rSSTA Daily Pipeline — Design Document  (v1.002)
 
 ENSO 일별 모니터링 파이프라인 (`ElNinoRSSTDailyCalculation.ipynb`) 설계 문서.
-OISST .nc 파일 + CPC 주간 SSTA 참조값으로부터 box-averaged SST, anomaly,
-relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·보고서까지
-하나의 파이프라인으로 묶는다.
+OISST .nc 파일 + CPC 주간/월간 SSTA 참조값으로부터 box-averaged SST, anomaly,
+relative SSTA(rSSTA), Niño 3.4 **RONI** (K_month 적용), 동서 경사를 계산하고,
+보정·검증·시각화·보고서(주간/월간 비교 포함)까지 하나의 파이프라인으로 묶는다.
 
 ---
 
@@ -11,15 +11,15 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
 
 ### Goal
 - OISST v2.1 AVHRR 일별 .nc 파일에서 4개 Niño 박스의 SST 시계열을 산출
-- CPC 1991–2020 climatology, CPC 주간 SSTA를 참조해 일별 anomaly와 rSSTA를 계산
-- ENSO 상태(El Niño / La Niña / Neutral, CP vs EP)를 raw rSSTA로 일별 판정
+- CPC 1991–2020 climatology, CPC 주간/월간 SSTA를 참조해 일별/주간/월별 anomaly·rSSTA·RONI를 계산
+- Niño 3.4 **RONI** (rSSTA / K_month, CPC ERSSTv5 K) 로 ENSO 상태(±0.5 threshold) 일별 판정
 - 무역풍 forcing 대리지표인 동서 SST 경사와 그 climatological 편차를 추적
+- 월별 OISST vs CPC (sstoi.indices + rel_mthsst9120) 비교로 OISST-기반 산출의 검증값 제공
 
 ### Out of scope
-- ERSSTv5 기반 RONI K-factor (variance correction, K≈1.5)는 **적용하지 않음**.
-  OISST의 native variance가 ERSST와 달라, K를 그대로 쓰면 부정확. OISST 전용
-  K 추정 또는 OISST→ERSST bias 보정이 선행되어야 함 (별도 작업).
-- ONI 3-month running mean 기반 공식 ENSO 선언과는 직접 비교하지 않음.
+- ONI 3-month running mean 기반 공식 ENSO 선언과는 직접 비교하지 않음 (RONI 단일달 값만 보고).
+- OISST→ERSST 잔차 bias 보정은 별도로 수행하지 않음. K가 ERSSTv5-튜닝값이라
+  월별 RONI에 ~0.05–0.1 °C 잔차가 남을 수 있음 (월별 비교 섹션의 OISST−CPC bias로 추적).
 - 동적 변수(SLA, OLR, U200 등) 분석은 포함하지 않음.
 
 ---
@@ -30,15 +30,20 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
 
 | File | Source | Role | Fetch |
 |---|---|---|---|
-| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 | 일별 0.25° SST grid (preliminary 파일은 `_preliminary` 접미사) | 수동 |
-| `Input/nino_clim_daily_1991-2020.csv` | setup 단계 산출 | 365일 × 4박스 climatology mean | 수동 (1회, static) |
+| `Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc` | NOAA OISST v2.1 | 일별 0.25° SST grid (preliminary 파일은 `_preliminary` 접미사) | **자동** (v1.001, 현재 + 직전 2개월) |
+| `Input/nino_clim_daily_1991-2020.csv` | setup 단계 산출 | 365일 × 4박스 climatology mean | 수동 (1회, static, committed) |
+| `Input/RONI_K_monthly.csv` | CPC ERSSTv5 derived | 월별 K = σ(rNINO3.4)/σ(rN34_raw), 1991–2020 | 수동 (1회, static, committed) [v1.002] |
 | `Input/wksst9120.for.txt` | CPC `wksst9120.for` | 주간 절대 SST + 절대 SSTA (4박스) | **자동** (run_pipeline 시작 시) |
 | `Input/rel_wksst9120.txt` | CPC relative SSTA | 주간 relative SSTA (4박스, 열대평균 차감 기준) | **자동** (run_pipeline 시작 시) |
+| `Input/sstoi.indices.txt` | CPC `sstoi.indices` | 월간 절대 SST + ANOM (4박스, ERSSTv5) | **자동** [v1.002] |
+| `Input/rel_mthsst9120.txt` | CPC `rel_mthsst9120.txt` | 월간 relative SSTA (4박스) | **자동** [v1.002] |
 
 ### CPC 자동 fetch
-`run_pipeline.py`가 시작 시점(stage [0])에 다음 두 URL에서 매번 새로 받아 `Input/`에 덮어쓴다:
+`run_pipeline.py`가 시작 시점(stage [0])에 다음 네 URL에서 매번 새로 받아 `Input/`에 덮어쓴다:
 - <https://cpc.ncep.noaa.gov/data/indices/wksst9120.for> → `Input/wksst9120.for.txt`
 - <https://cpc.ncep.noaa.gov/data/indices/rel_wksst9120.txt> → `Input/rel_wksst9120.txt`
+- <https://cpc.ncep.noaa.gov/data/indices/sstoi.indices> → `Input/sstoi.indices.txt` (v1.002)
+- <https://cpc.ncep.noaa.gov/data/indices/rel_mthsst9120.txt> → `Input/rel_mthsst9120.txt` (v1.002)
 
 네트워크 실패 시 기존 로컬 파일이 있으면 그대로 사용 (warning), 둘 다 없으면 종료.
 `urllib.request` 표준 라이브러리만 사용 — 추가 의존성 없음.
@@ -59,26 +64,29 @@ relative SSTA(rSSTA), 동서 경사를 계산하고, 보정·검증·시각화·
 전체 흐름:
 
 ```
-[0]  CPC fetch (urllib) ──► Input/wksst9120.for.txt + rel_wksst9120.txt
-[0b] OISST fetch (urllib) ─► Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc
+[0]  CPC fetch (urllib) ──► Input/{wksst9120.for, rel_wksst9120, sstoi.indices, rel_mthsst9120}.txt
+[0b] OISST fetch (urllib) ─► Input/oisst_data/oisst-avhrr-v02r01.YYYYMMDD.nc  (현재+직전 2개월)
                                           │
 .nc files ──► [1] box-mean SST ──► [2] anomaly (vs clim) ──► [3] CPC bias 보정
                                                                     │
-   CPC abs+rel SSTA ──► [4] tropical mean 역산 + 추세 외삽 ───────► [5] rSSTA
+   CPC abs+rel SSTA ──► [4] tropical mean 역산 + 추세 외삽 ───────► [4r] rSSTA / K → RONI(3.4)
+                                                                    │
+                          [5] 주별 집계 / [5b] 월별 + CPC 월간 비교 ◄┤
                                                                     │
                                             [6] gradient anomaly ◄──┤
                                                                     │
-                          [7] 주별 집계 / [8] 플롯 / [9] 보고서 ◄──┘
+                                          [7] 플롯 / [8] 보고서 ◄────┘
 ```
 
 ### [0] CPC 자동 fetch
-- 두 URL을 `urllib.request.urlopen`(timeout=20s)으로 받아 `Input/`에 덮어쓴다.
+- **4개 URL**을 `urllib.request.urlopen`(timeout=20s)으로 받아 `Input/`에 덮어쓴다 (주간 2개 + 월간 2개, v1.002에서 월간 추가).
 - 네트워크 실패 + 로컬 파일 존재: 경고 후 진행. 네트워크 실패 + 로컬 파일 없음: 즉시 종료.
 - CPC 주간 bulletin은 매주 수요일경 갱신 (week_center가 일요일 기준 +3일).
-  매 실행마다 fresh로 받아 stale 데이터 위험 제거.
+  월간 bulletin은 매월 초 갱신. 매 실행마다 fresh로 받아 stale 데이터 위험 제거.
 
-### [0b] OISST 자동 fetch [v1.001]
-- [sst/fetch_oisst.py](sst/fetch_oisst.py)의 `fetch_months()` 호출 — 이번 달 + 지난 달
+### [0b] OISST 자동 fetch [v1.001 / fetch 범위는 v1.002에서 3개월로 확장]
+- [sst/fetch_oisst.py](sst/fetch_oisst.py)의 `fetch_months()` 호출 — **현재월 + 직전 2개월**
+  (v1.002에서 월간 비교용으로 2개월 → 3개월 확장)
   NCEI 디렉터리 walk:
   `https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/<YYYYMM>/`
 - 날짜별 best 버전 결정 (final 우선, 없으면 preliminary).

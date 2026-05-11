@@ -4,6 +4,15 @@ ENSO·IOD 일별 모니터링 파이프라인 — OISST 표면 SST(rSSTA, ENSO) 
 
 ENSO/IOD daily monitoring pipelines — OISST surface SST (rSSTA, ENSO) + equatorial Pacific (TAO/TRITON) and equatorial Indian Ocean (RAMA) buoy subsurface cross-sections.
 
+## v1.002 — Monthly + RONI 추가
+- **CPC 월간 bulletin 자동 fetch** — `sstoi.indices` (절대/anom) + `rel_mthsst9120.txt` (rNINO)
+- **OISST `.nc` 기본 fetch 범위 확장** — 현재월 + 직전 2개월 (총 3개월, 월간 비교용)
+- **월별 OISST vs CPC 비교 테이블** + `nino_rssta_monthly.csv` 신규
+- **RONI 섹션 신설** — `Input/RONI_K_monthly.csv`의 월별 K 인자(CPC ERSSTv5 1991-2020)를
+  적용한 Niño 3.4 RONI를 daily/weekly/monthly 모두에 추가. ±0.5 °C ENSO 임계선
+  직접 적용 가능. (K는 ERSSTv5 튜닝값 — OISST→ERSST 잔차 bias는 별도 보정 안 함)
+- 보고서 verdict가 raw rSSTA 대신 **RONI 기준**으로 분류
+
 ## v1.001 — Automation 추가
 - **CPC 주간 bulletin 자동 fetch** (sst/run_pipeline 시작 시)
 - **OISST `.nc` 자동 fetch** (`sst/fetch_oisst.py`, 매 실행 시 호출, prelim → final 자동 교체)
@@ -23,8 +32,11 @@ Code/
 ├── Input/                                    # 원천 데이터
 │   ├── oisst_data/*.nc                       # NOAA OISST v2.1 AVHRR 일별 .nc
 │   ├── nino_clim_daily_1991-2020.csv         # static (committed)
+│   ├── RONI_K_monthly.csv                    # CPC 월별 RONI K (static, committed)
 │   ├── wksst9120.for.txt                     # CPC 주간 절대 SSTA (auto-fetch)
 │   ├── rel_wksst9120.txt                     # CPC 주간 relative SSTA (auto-fetch)
+│   ├── sstoi.indices.txt                     # CPC 월간 절대/anom (auto-fetch)
+│   ├── rel_mthsst9120.txt                    # CPC 월간 relative SSTA (auto-fetch)
 │   ├── data.tar                              # PMEL TAO/TRITON Pacific buoy
 │   ├── data_p_clim_processed.tar.gz          # Pacific per-lon DOY clim (static, committed)
 │   ├── data_rama.tar                         # PMEL RAMA Indian buoy (Indian basin 시)
@@ -121,6 +133,7 @@ pip install -r requirements.txt
 | 파일 / File | 비고 / Note |
 |---|---|
 | `Input/nino_clim_daily_1991-2020.csv` | SST: 4-box × 365일 climatology (1991–2020 기준) |
+| `Input/RONI_K_monthly.csv` | CPC RONI 월별 K 인자 (1991–2020 ERSSTv5 기준) |
 | `Input/data_p_clim_processed.tar.gz` | Pacific subsurface per-longitude DOY climatology |
 | `Input/data_rama_clim_processed.tar.gz` (있을 때) | Indian subsurface per-longitude DOY climatology |
 
@@ -136,6 +149,8 @@ Auto-fetched at the start of `sst/run_pipeline.py`:
 |---|---|
 | `Input/wksst9120.for.txt` | <https://cpc.ncep.noaa.gov/data/indices/wksst9120.for> |
 | `Input/rel_wksst9120.txt` | <https://cpc.ncep.noaa.gov/data/indices/rel_wksst9120.txt> |
+| `Input/sstoi.indices.txt` | <https://cpc.ncep.noaa.gov/data/indices/sstoi.indices> |
+| `Input/rel_mthsst9120.txt` | <https://cpc.ncep.noaa.gov/data/indices/rel_mthsst9120.txt> |
 
 네트워크 불가 + 기존 파일 존재 시 경고 후 기존 파일 사용. 둘 다 없으면 에러.
 Network failure + existing file → warn and reuse; otherwise hard fail.
@@ -213,8 +228,9 @@ pipeline exits non-zero, so failures are visible without watching the terminal.
 ## 산출물 / Outputs
 
 ### CSV files (`Output/` 루트 / flat) — v1.002
-- `nino_rssta_daily.csv` — 일별 4-box rSSTA + 동서경사
-- `nino_rssta_weekly.csv` — 주별 평균 + CPC 검증
+- `nino_rssta_daily.csv` — 일별 4-box rSSTA + 동서경사 + Niño 3.4 RONI + K
+- `nino_rssta_weekly.csv` — 주별 평균 + CPC 주간 검증 + RONI
+- `nino_rssta_monthly.csv` — 월별 OISST vs CPC (sstoi.indices + rel_mthsst9120) + RONI/K
 - `sst_grid_indo_pacific.csv` — 인도-태평양 격자 SST (lat -10~10°, lon 30°E~180°,
   1°×1° 격자, 각 셀 ±0.5° cos(lat)-가중 평균, **최근 1일만**)
 - `pac_5_data.csv` — Pacific 부이 raw + climatology + anomaly (모든 위도, **최근 1일 스냅샷**)
@@ -224,8 +240,8 @@ pipeline exits non-zero, so failures are visible without watching the terminal.
 ### SST (`Output/SST/`)
 - `nino_rssta_plot.png` — 4-panel 시계열
 - `nino_gradients_plot.png` — 동서 경사 + climatology 비교
-- `nino_report.md` — 자동 생성 markdown 보고서
-- `nino_analysis.zip` — 위 5개 묶음 (CSV 3개 포함)
+- `nino_report.md` — 자동 생성 markdown 보고서 (verdict는 **RONI 기준** ±0.5)
+- `nino_analysis.zip` — 위 PNG/report + CSV 4개 묶음
 
 ### Subsurface — Pacific (`Output/Subsurface/Pacific/`)
 - `pac_5_anomaly_YYYYMMDD.png` × 15 — 일별 anomaly 단면도 (137°E–90°W, 0–350 m, ±5°)

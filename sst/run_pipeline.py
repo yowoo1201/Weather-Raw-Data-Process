@@ -22,23 +22,28 @@ INPUT_DIR  = ROOT_DIR / "Input"
 OUT_DIR    = ROOT_DIR / "Output" / "SST"
 CSV_DIR    = ROOT_DIR / "Output"          # CSVs land here (flat, not in subfolder)
 
-NC_DIR    = str(INPUT_DIR / "oisst_data")
-CLIM_FILE = str(INPUT_DIR / "nino_clim_daily_1991-2020.csv")
-ABS_FILE  = str(INPUT_DIR / "wksst9120.for.txt")
-REL_FILE  = str(INPUT_DIR / "rel_wksst9120.txt")
-OUT_DIR   = str(OUT_DIR)
-CSV_DIR   = str(CSV_DIR)
+NC_DIR       = str(INPUT_DIR / "oisst_data")
+CLIM_FILE    = str(INPUT_DIR / "nino_clim_daily_1991-2020.csv")
+ABS_FILE     = str(INPUT_DIR / "wksst9120.for.txt")
+REL_FILE     = str(INPUT_DIR / "rel_wksst9120.txt")
+MTH_ABS_FILE = str(INPUT_DIR / "sstoi.indices.txt")
+MTH_REL_FILE = str(INPUT_DIR / "rel_mthsst9120.txt")
+RONI_K_FILE  = str(INPUT_DIR / "RONI_K_monthly.csv")
+OUT_DIR      = str(OUT_DIR)
+CSV_DIR      = str(CSV_DIR)
 
-# Auto-fetch latest CPC weekly SST bulletins. These files are appended to
-# weekly so we always pull fresh on each run; if the network is unreachable
-# we fall back to whatever is already on disk.
+# Auto-fetch latest CPC weekly + monthly SST bulletins. CPC overwrites these
+# files in place on their server, so we always pull fresh on each run; if the
+# network is unreachable we fall back to whatever is already on disk.
 import sys, urllib.request
 INPUT_DIR.mkdir(parents=True, exist_ok=True)
 _CPC_TARGETS = [
     ("https://cpc.ncep.noaa.gov/data/indices/wksst9120.for", ABS_FILE),
     ("https://cpc.ncep.noaa.gov/data/indices/rel_wksst9120.txt", REL_FILE),
+    ("https://cpc.ncep.noaa.gov/data/indices/sstoi.indices", MTH_ABS_FILE),
+    ("https://cpc.ncep.noaa.gov/data/indices/rel_mthsst9120.txt", MTH_REL_FILE),
 ]
-print("[0] CPC 주간 SST bulletin 자동 fetch")
+print("[0] CPC 주간/월간 SST bulletin 자동 fetch")
 for _url, _dest in _CPC_TARGETS:
     try:
         with urllib.request.urlopen(_url, timeout=20) as _r:
@@ -259,6 +264,15 @@ df = df.merge(trop_daily, on='date', how='left')
 for r in REGIONS:
     df[f'{r}_rssta'] = df[f'{r}_anom_corrected'] - df['tropical_mean_ssta']
 
+# RONI = rSSTA(3.4) / K, K from RONI_K_monthly.csv (CPC ERSSTv5 1991–2020).
+# K corrects for the variance reduction of "absolute SSTA − tropical mean"
+# vs raw Niño 3.4 SSTA, so RONI is directly comparable to standard ±0.5
+# ENSO thresholds. Note: K is ERSSTv5-tuned; OISST vs ERSST has a small
+# residual bias that this pipeline does not separately remove.
+roni_k = pd.read_csv(RONI_K_FILE)[['month', 'K']]
+df = df.merge(roni_k, on='month', how='left')
+df['nino34_roni'] = df['nino34_rssta'] / df['K']
+
 clim_idx = clim.set_index(['month','day'])
 df = df.set_index(['month','day'])
 df['grad_4_12_clim']   = clim_idx['nino4_clim']  - clim_idx['nino12_clim']
@@ -287,6 +301,7 @@ for r in REGIONS:
     agg[f'{r}_rssta']      = (f'{r}_rssta','mean')
     agg[f'{r}_anom']       = (f'{r}_anom_corrected','mean')
     agg[r]                 = (r,'mean')
+agg['nino34_roni']    = ('nino34_roni','mean')
 agg['grad_4_12_abs']  = ('grad_4_minus_12','mean')
 agg['grad_4_12_anom'] = ('grad_4_12_anom','mean')
 
@@ -295,6 +310,72 @@ weekly = weekly.merge(rel.rename(columns={'week_center':'week_center'}),
                      on='week_center', how='left')
 weekly.to_csv(f'{CSV_DIR}/nino_rssta_weekly.csv', index=False)
 print(f"    -> {CSV_DIR}/nino_rssta_weekly.csv 저장")
+
+print("[5b] 월별 평균 + CPC 월간 (sstoi.indices, rel_mthsst9120) 비교")
+# CPC sstoi.indices: "YR MON NINO1+2 ANOM NINO3 ANOM NINO4 ANOM NINO3.4 ANOM"
+mth_abs_rows = []
+for ln in open(MTH_ABS_FILE):
+    parts = ln.split()
+    if len(parts) < 10:
+        continue
+    try:
+        yr = int(parts[0]); mo = int(parts[1])
+        vals = [float(x) for x in parts[2:10]]
+    except ValueError:
+        continue
+    mth_abs_rows.append({
+        'year': yr, 'month': mo,
+        'nino12_cpc':       vals[0], 'nino12_anom_cpc': vals[1],
+        'nino3_cpc':        vals[2], 'nino3_anom_cpc':  vals[3],
+        'nino4_cpc':        vals[4], 'nino4_anom_cpc':  vals[5],
+        'nino34_cpc':       vals[6], 'nino34_anom_cpc': vals[7],
+    })
+mth_abs = pd.DataFrame(mth_abs_rows)
+
+# CPC rel_mthsst9120.txt: "YEAR MON rNINO1+2 rNINO3 rNINO4 rNINO3.4"
+mth_rel_rows = []
+for ln in open(MTH_REL_FILE):
+    parts = ln.split()
+    if len(parts) < 6:
+        continue
+    try:
+        yr = int(parts[0]); mo = int(parts[1])
+        vals = [float(x) for x in parts[2:6]]
+    except ValueError:
+        continue
+    mth_rel_rows.append({
+        'year': yr, 'month': mo,
+        'nino12_rssta_cpc': vals[0],
+        'nino3_rssta_cpc':  vals[1],
+        'nino4_rssta_cpc':  vals[2],
+        'nino34_rssta_cpc': vals[3],
+    })
+mth_rel = pd.DataFrame(mth_rel_rows)
+cpc_monthly = mth_abs.merge(mth_rel, on=['year','month'], how='outer')
+
+# OISST monthly aggregates from daily df. df['month'] already exists (1-12);
+# add year so we can group.
+oisst_mth_agg = {'n_days': ('date', 'count')}
+for r in REGIONS:
+    oisst_mth_agg[f'{r}_oisst']       = (r, 'mean')
+    oisst_mth_agg[f'{r}_anom_oisst']  = (f'{r}_anom_corrected', 'mean')
+    oisst_mth_agg[f'{r}_rssta_oisst'] = (f'{r}_rssta', 'mean')
+oisst_mth_agg['nino34_roni_oisst'] = ('nino34_roni', 'mean')
+oisst_mth_agg['K']                 = ('K', 'first')
+
+oisst_mth = (df.assign(year=df.date.dt.year)
+               .groupby(['year', 'month'])
+               .agg(**oisst_mth_agg)
+               .reset_index())
+
+monthly = oisst_mth.merge(cpc_monthly, on=['year', 'month'], how='left')
+# Days-in-month for status column
+monthly['days_in_month'] = monthly.apply(
+    lambda r: pd.Period(f"{int(r.year)}-{int(r.month):02d}", freq='M').days_in_month,
+    axis=1,
+)
+monthly.to_csv(f'{CSV_DIR}/nino_rssta_monthly.csv', index=False)
+print(f"    -> {CSV_DIR}/nino_rssta_monthly.csv 저장 ({len(monthly)} months)")
 
 print("[6] 플롯 생성")
 rel_recent = rel.rename(columns={'week_center':'date'})
@@ -444,18 +525,36 @@ for r, name in [('nino12','Nino 1+2'),('nino3','Nino 3'),
     arrow = 'up' if t > 0.1 else ('dn' if t < -0.1 else '->')
     latest_table += f"| {name} | {v:+.2f} | {classify(v)} | {arrow} {t:+.2f} |\n"
 
-n34_val = last.nino34_rssta
-if n34_val >= 0.33:
-    verdict = (f"**Nino 3.4 raw rSSTA = {n34_val:+.2f} -- El Nino threshold crossed (raw scale)** "
-               f"(공식 RONI/ONI는 3개월 이동평균 기준이라 즉시 선언은 아님; raw rSSTA는 분산이 작아 직접 비교 부정확)")
-elif n34_val >= 0.20:
-    verdict = f"**Warm-leaning** (raw rSSTA {n34_val:+.2f}) -- El Nino 발달 초기 신호 가능"
-elif n34_val > -0.20:
-    verdict = f"**ENSO-neutral** (raw rSSTA {n34_val:+.2f})"
-elif n34_val > -0.33:
-    verdict = f"**Cool-leaning** (raw rSSTA {n34_val:+.2f}) -- La Nina 발달 신호 가능"
+# 7-day RONI trend (Niño 3.4)
+roni_trend = 0.0
+if len(d7) >= 2:
+    roni_trend = float(d7.iloc[-1]['nino34_roni'] - d7.iloc[0]['nino34_roni'])
+
+def classify_roni(v):
+    if   v >=  0.5: return "El Niño (RONI ≥ +0.5)"
+    elif v >=  0.2: return "Warm-leaning"
+    elif v >  -0.2: return "Neutral"
+    elif v >  -0.5: return "Cool-leaning"
+    else:           return "La Niña (RONI ≤ −0.5)"
+
+n34_val  = last.nino34_rssta
+n34_roni = last.nino34_roni
+n34_K    = last.K
+if n34_roni >= 0.5:
+    verdict = (f"**Niño 3.4 RONI = {n34_roni:+.2f} (rSSTA {n34_val:+.2f} / K={n34_K:.3f}) "
+               f"— El Niño threshold crossed (≥ +0.5)** "
+               f"(공식 선언은 5개 연속 3개월 평균 ≥ +0.5 기준)")
+elif n34_roni >= 0.2:
+    verdict = (f"**Warm-leaning** (RONI {n34_roni:+.2f}, rSSTA {n34_val:+.2f}, K={n34_K:.3f}) "
+               f"— El Niño 발달 초기 신호 가능")
+elif n34_roni > -0.2:
+    verdict = f"**ENSO-neutral** (RONI {n34_roni:+.2f}, rSSTA {n34_val:+.2f}, K={n34_K:.3f})"
+elif n34_roni > -0.5:
+    verdict = (f"**Cool-leaning** (RONI {n34_roni:+.2f}, rSSTA {n34_val:+.2f}, K={n34_K:.3f}) "
+               f"— La Niña 발달 신호 가능")
 else:
-    verdict = f"**La Nina threshold crossed (raw scale)** (raw rSSTA {n34_val:+.2f})"
+    verdict = (f"**Niño 3.4 RONI = {n34_roni:+.2f} (rSSTA {n34_val:+.2f} / K={n34_K:.3f}) "
+               f"— La Niña threshold crossed (≤ −0.5)**")
 
 cp_ep = ""
 n12_v = last.nino12_rssta
@@ -481,11 +580,93 @@ if len(bias_rows) > 0:
                     ('nino34','Nino 3.4'),('nino4','Nino 4')]:
         validation_str += f"| {name} | {offsets[r]:+.3f} |\n"
 
+# ─── RONI section (Niño 3.4): daily/weekly/monthly with K applied ───────────
+def _fmt(v):
+    return f"{v:+.2f}" if pd.notna(v) else " -- "
+
+roni_str = "\n## RONI — Relative Oceanic Niño Index (Niño 3.4)\n\n"
+roni_str += (
+    "RONI = rSSTA(3.4) / K, where K is the CPC monthly variance correction "
+    "(K = σ(rNINO3.4) / σ(rN34_raw), 1991–2020 baseline, ERSSTv5). K peaks "
+    "in Sep (~1.27) and bottoms in Mar (~1.08). Standard ENSO thresholds "
+    "(±0.5 °C) apply directly to RONI. **Caveat**: K is ERSSTv5-tuned; "
+    "OISST→ERSST has a small residual bias not corrected here.\n\n"
+)
+arrow_r = 'up' if roni_trend > 0.05 else ('dn' if roni_trend < -0.05 else '->')
+roni_str += (
+    f"### Latest daily ({latest_date})\n"
+    f"- rSSTA(3.4) = **{n34_val:+.2f}**\n"
+    f"- K ({last.date.strftime('%b')}) = {n34_K:.3f}\n"
+    f"- **RONI = {n34_roni:+.2f}** — {classify_roni(n34_roni)}  "
+    f"(7-day trend {arrow_r} {roni_trend:+.2f})\n\n"
+)
+
+# Recent weeks RONI table
+roni_str += "### Recent weeks\n\n"
+roni_str += "| Week (Sun) | Days | rSSTA(3.4) | K (week) | **RONI** |\n"
+roni_str += "|---|---|---|---|---|\n"
+# K used per-week: the daily K we already merged onto df. Re-aggregate it for table.
+df_with_K = df[['week_start', 'K']].drop_duplicates('week_start')
+weekly_k = df.groupby('week_start')['K'].mean().reset_index().rename(columns={'K':'K_week'})
+weekly_disp = weekly.merge(weekly_k, on='week_start', how='left')
+for _, w in weekly_disp.iterrows():
+    days = 'OK' if int(w['n_days']) == 7 else f"{int(w['n_days'])}/7"
+    roni_str += (
+        f"| {w['week_start'].strftime('%m-%d')} | {days} | "
+        f"{w['nino34_rssta']:+.2f} | {w['K_week']:.3f} | "
+        f"**{w['nino34_roni']:+.2f}** |\n"
+    )
+
+# Monthly RONI table
+roni_str += "\n### Monthly\n\n"
+roni_str += "| Month | Days | rSSTA(3.4) | K | **RONI** | Status |\n"
+roni_str += "|---|---|---|---|---|---|\n"
+for _, mr in monthly.sort_values(['year','month']).iterrows():
+    ym = f"{int(mr['year']):04d}-{int(mr['month']):02d}"
+    days = 'OK' if int(mr['n_days']) == int(mr['days_in_month']) else f"{int(mr['n_days'])}/{int(mr['days_in_month'])}"
+    roni_str += (
+        f"| {ym} | {days} | {mr['nino34_rssta_oisst']:+.2f} | "
+        f"{mr['K']:.3f} | **{mr['nino34_roni_oisst']:+.2f}** | "
+        f"{classify_roni(mr['nino34_roni_oisst'])} |\n"
+    )
+
+# ─── Monthly comparison table (OISST vs CPC sstoi.indices + rel_mthsst9120) ───
+
+monthly_str = ""
+if len(monthly) > 0:
+    mth_sorted = monthly.sort_values(['year','month'])
+    # Nino 3.4 focus (matches the rest of the report)
+    monthly_str  = "\n## Monthly comparison — Niño 3.4 (OISST vs CPC)\n\n"
+    monthly_str += ("OISST monthly mean from daily .nc; CPC monthly from "
+                    "`sstoi.indices` (ERSSTv5 ANOM) + `rel_mthsst9120.txt` (rNINO3.4).\n\n")
+    monthly_str += ("| Month | Days | OISST rSSTA | CPC rNINO3.4 | OISST anom | CPC ANOM | OISST SST | CPC SST |\n"
+                    "|---|---|---|---|---|---|---|---|\n")
+    for _, mr in mth_sorted.iterrows():
+        ym = f"{int(mr['year']):04d}-{int(mr['month']):02d}"
+        status = 'OK' if int(mr['n_days']) == int(mr['days_in_month']) else f"{int(mr['n_days'])}/{int(mr['days_in_month'])}"
+        monthly_str += (
+            f"| {ym} | {status} | "
+            f"{_fmt(mr['nino34_rssta_oisst'])} | {_fmt(mr.get('nino34_rssta_cpc'))} | "
+            f"{_fmt(mr['nino34_anom_oisst'])} | {_fmt(mr.get('nino34_anom_cpc'))} | "
+            f"{_fmt(mr['nino34_oisst'])} | {_fmt(mr.get('nino34_cpc'))} |\n"
+        )
+
+    # Per-region mean bias on months that have both sources
+    full_mths = mth_sorted.dropna(subset=['nino34_rssta_cpc'])
+    if len(full_mths) > 0:
+        monthly_str += "\n### Monthly OISST−CPC bias (rSSTA, all overlap months)\n\n"
+        monthly_str += "| Region | OISST−CPC rSSTA mean | n months |\n|---|---|---|\n"
+        for r, name in [('nino12','Nino 1+2'),('nino3','Nino 3'),
+                        ('nino34','Nino 3.4'),('nino4','Nino 4')]:
+            diff = (full_mths[f'{r}_rssta_oisst'] - full_mths[f'{r}_rssta_cpc']).dropna()
+            if len(diff) > 0:
+                monthly_str += f"| {name} | {diff.mean():+.3f} | {len(diff)} |\n"
+
 report = f"""# ENSO Daily Monitoring Report
 **Date**: {latest_date}
 **Data**: OISST v2.1 AVHRR, {len(df)} days from {df.date.min().strftime('%Y-%m-%d')}
-**Reference**: 1991-2020 climatology (CPC), tropical mean (20S-20N) subtracted (K=1, no variance correction). \\
-Note: ONI/RONI thresholds (+/-0.5C) are not directly comparable -- RONI's K factor is ERSSTv5-based and requires OISST->ERSST bias correction before applying to OISST data.
+**Reference**: 1991-2020 climatology (CPC), tropical mean (20S-20N) subtracted. \\
+**rSSTA** = raw relative SSTA (no variance correction, K=1). **RONI** = rSSTA(3.4) / K_month (CPC ERSSTv5 1991-2020), directly comparable to ±0.5 °C ENSO thresholds. See RONI section below.
 **Tropical mean trend**: {trop_trend_per_week:+.4f} C/week (R2={trop_r2:.2f}, last {N_WEEKS_FIT} weeks)
 
 ---
@@ -514,14 +695,21 @@ Note: ONI/RONI thresholds (+/-0.5C) are not directly comparable -- RONI's K fact
 {validation_str}
 
 ---
+{roni_str}
+
+---
+{monthly_str}
+
+---
 
 ## Output files
-- `nino_rssta_daily.csv` -- full daily data
-- `nino_rssta_weekly.csv` -- weekly summary
+- `nino_rssta_daily.csv` -- full daily data (incl. `nino34_roni`, K)
+- `nino_rssta_weekly.csv` -- weekly summary (incl. `nino34_roni`)
+- `nino_rssta_monthly.csv` -- monthly OISST vs CPC + `nino34_roni_oisst`, K
 - `nino_rssta_plot.png` -- rSSTA time series
 - `nino_gradients_plot.png` -- zonal gradient
 
-*Generated automatically from OISST .nc files + CPC weekly references.*
+*Generated automatically from OISST .nc files + CPC weekly + monthly references + RONI K (CPC ERSSTv5).*
 """
 
 with open(f'{OUT_DIR}/nino_report.md', 'w', encoding='utf-8') as f:
@@ -587,6 +775,7 @@ try:
     csv_extras = [
         Path(CSV_DIR) / 'nino_rssta_daily.csv',
         Path(CSV_DIR) / 'nino_rssta_weekly.csv',
+        Path(CSV_DIR) / 'nino_rssta_monthly.csv',
         Path(CSV_DIR) / 'sst_grid_indo_pacific.csv',
     ]
     with zipfile.ZipFile(zip_path, 'w',

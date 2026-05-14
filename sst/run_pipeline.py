@@ -264,14 +264,12 @@ df = df.merge(trop_daily, on='date', how='left')
 for r in REGIONS:
     df[f'{r}_rssta'] = df[f'{r}_anom_corrected'] - df['tropical_mean_ssta']
 
-# RONI = rSSTA(3.4) / K, K from RONI_K_monthly.csv (CPC ERSSTv5 1991–2020).
-# K corrects for the variance reduction of "absolute SSTA − tropical mean"
-# vs raw Niño 3.4 SSTA, so RONI is directly comparable to standard ±0.5
-# ENSO thresholds. Note: K is ERSSTv5-tuned; OISST vs ERSST has a small
-# residual bias that this pipeline does not separately remove.
+# RONI index = rSSTA(Niño 3) × K_month, K from RONI_K_monthly.csv
+# (CPC ERSSTv5 1991–2020). Column name kept as `nino34_roni` for
+# downstream CSV/report stability.
 roni_k = pd.read_csv(RONI_K_FILE)[['month', 'K']]
 df = df.merge(roni_k, on='month', how='left')
-df['nino34_roni'] = df['nino34_rssta'] / df['K']
+df['nino34_roni'] = df['nino3_rssta'] * df['K']
 
 clim_idx = clim.set_index(['month','day'])
 df = df.set_index(['month','day'])
@@ -537,23 +535,23 @@ def classify_roni(v):
     elif v >  -0.5: return "Cool-leaning"
     else:           return "La Niña (RONI ≤ −0.5)"
 
-n34_val  = last.nino34_rssta
+n3_val   = last.nino3_rssta
 n34_roni = last.nino34_roni
 n34_K    = last.K
 if n34_roni >= 0.5:
-    verdict = (f"**Niño 3.4 RONI = {n34_roni:+.2f} (rSSTA {n34_val:+.2f} / K={n34_K:.3f}) "
+    verdict = (f"**RONI = {n34_roni:+.2f} (rSSTA(3) {n3_val:+.2f} × K={n34_K:.3f}) "
                f"— El Niño threshold crossed (≥ +0.5)** "
                f"(공식 선언은 5개 연속 3개월 평균 ≥ +0.5 기준)")
 elif n34_roni >= 0.2:
-    verdict = (f"**Warm-leaning** (RONI {n34_roni:+.2f}, rSSTA {n34_val:+.2f}, K={n34_K:.3f}) "
+    verdict = (f"**Warm-leaning** (RONI {n34_roni:+.2f}, rSSTA(3) {n3_val:+.2f} × K={n34_K:.3f}) "
                f"— El Niño 발달 초기 신호 가능")
 elif n34_roni > -0.2:
-    verdict = f"**ENSO-neutral** (RONI {n34_roni:+.2f}, rSSTA {n34_val:+.2f}, K={n34_K:.3f})"
+    verdict = f"**ENSO-neutral** (RONI {n34_roni:+.2f}, rSSTA(3) {n3_val:+.2f} × K={n34_K:.3f})"
 elif n34_roni > -0.5:
-    verdict = (f"**Cool-leaning** (RONI {n34_roni:+.2f}, rSSTA {n34_val:+.2f}, K={n34_K:.3f}) "
+    verdict = (f"**Cool-leaning** (RONI {n34_roni:+.2f}, rSSTA(3) {n3_val:+.2f} × K={n34_K:.3f}) "
                f"— La Niña 발달 신호 가능")
 else:
-    verdict = (f"**Niño 3.4 RONI = {n34_roni:+.2f} (rSSTA {n34_val:+.2f} / K={n34_K:.3f}) "
+    verdict = (f"**RONI = {n34_roni:+.2f} (rSSTA(3) {n3_val:+.2f} × K={n34_K:.3f}) "
                f"— La Niña threshold crossed (≤ −0.5)**")
 
 cp_ep = ""
@@ -584,18 +582,18 @@ if len(bias_rows) > 0:
 def _fmt(v):
     return f"{v:+.2f}" if pd.notna(v) else " -- "
 
-roni_str = "\n## RONI — Relative Oceanic Niño Index (Niño 3.4)\n\n"
+roni_str = "\n## RONI — rSSTA(Niño 3) × K_month\n\n"
 roni_str += (
-    "RONI = rSSTA(3.4) / K, where K is the CPC monthly variance correction "
+    "RONI = rSSTA(3) × K, where K is the CPC monthly variance scaling "
     "(K = σ(rNINO3.4) / σ(rN34_raw), 1991–2020 baseline, ERSSTv5). K peaks "
-    "in Sep (~1.27) and bottoms in Mar (~1.08). Standard ENSO thresholds "
-    "(±0.5 °C) apply directly to RONI. **Caveat**: K is ERSSTv5-tuned; "
-    "OISST→ERSST has a small residual bias not corrected here.\n\n"
+    "in Sep (~1.27) and bottoms in Mar (~1.08). Column name kept as "
+    "`nino34_roni` for CSV/downstream stability. Standard ENSO thresholds "
+    "(±0.5 °C) applied directly.\n\n"
 )
 arrow_r = 'up' if roni_trend > 0.05 else ('dn' if roni_trend < -0.05 else '->')
 roni_str += (
     f"### Latest daily ({latest_date})\n"
-    f"- rSSTA(3.4) = **{n34_val:+.2f}**\n"
+    f"- rSSTA(3) = **{n3_val:+.2f}**\n"
     f"- K ({last.date.strftime('%b')}) = {n34_K:.3f}\n"
     f"- **RONI = {n34_roni:+.2f}** — {classify_roni(n34_roni)}  "
     f"(7-day trend {arrow_r} {roni_trend:+.2f})\n\n"
@@ -603,29 +601,27 @@ roni_str += (
 
 # Recent weeks RONI table
 roni_str += "### Recent weeks\n\n"
-roni_str += "| Week (Sun) | Days | rSSTA(3.4) | K (week) | **RONI** |\n"
+roni_str += "| Week (Sun) | Days | rSSTA(3) | K (week) | **RONI** |\n"
 roni_str += "|---|---|---|---|---|\n"
-# K used per-week: the daily K we already merged onto df. Re-aggregate it for table.
-df_with_K = df[['week_start', 'K']].drop_duplicates('week_start')
 weekly_k = df.groupby('week_start')['K'].mean().reset_index().rename(columns={'K':'K_week'})
 weekly_disp = weekly.merge(weekly_k, on='week_start', how='left')
 for _, w in weekly_disp.iterrows():
     days = 'OK' if int(w['n_days']) == 7 else f"{int(w['n_days'])}/7"
     roni_str += (
         f"| {w['week_start'].strftime('%m-%d')} | {days} | "
-        f"{w['nino34_rssta']:+.2f} | {w['K_week']:.3f} | "
+        f"{w['nino3_rssta']:+.2f} | {w['K_week']:.3f} | "
         f"**{w['nino34_roni']:+.2f}** |\n"
     )
 
 # Monthly RONI table
 roni_str += "\n### Monthly\n\n"
-roni_str += "| Month | Days | rSSTA(3.4) | K | **RONI** | Status |\n"
+roni_str += "| Month | Days | rSSTA(3) | K | **RONI** | Status |\n"
 roni_str += "|---|---|---|---|---|---|\n"
 for _, mr in monthly.sort_values(['year','month']).iterrows():
     ym = f"{int(mr['year']):04d}-{int(mr['month']):02d}"
     days = 'OK' if int(mr['n_days']) == int(mr['days_in_month']) else f"{int(mr['n_days'])}/{int(mr['days_in_month'])}"
     roni_str += (
-        f"| {ym} | {days} | {mr['nino34_rssta_oisst']:+.2f} | "
+        f"| {ym} | {days} | {mr['nino3_rssta_oisst']:+.2f} | "
         f"{mr['K']:.3f} | **{mr['nino34_roni_oisst']:+.2f}** | "
         f"{classify_roni(mr['nino34_roni_oisst'])} |\n"
     )
@@ -666,7 +662,7 @@ report = f"""# ENSO Daily Monitoring Report
 **Date**: {latest_date}
 **Data**: OISST v2.1 AVHRR, {len(df)} days from {df.date.min().strftime('%Y-%m-%d')}
 **Reference**: 1991-2020 climatology (CPC), tropical mean (20S-20N) subtracted. \\
-**rSSTA** = raw relative SSTA (no variance correction, K=1). **RONI** = rSSTA(3.4) / K_month (CPC ERSSTv5 1991-2020), directly comparable to ±0.5 °C ENSO thresholds. See RONI section below.
+**rSSTA** = raw relative SSTA (no variance correction, K=1). **RONI** = rSSTA(3) × K_month (CPC ERSSTv5 1991-2020 monthly K), compared to ±0.5 °C ENSO thresholds. See RONI section below.
 **Tropical mean trend**: {trop_trend_per_week:+.4f} C/week (R2={trop_r2:.2f}, last {N_WEEKS_FIT} weeks)
 
 ---

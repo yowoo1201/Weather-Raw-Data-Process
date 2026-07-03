@@ -132,6 +132,10 @@ for f in sorted(glob.glob(f'{NC_DIR}/oisst-avhrr-v02r01.*.nc')):
     ds.close()
 
 df = pd.DataFrame(rows).sort_values('date').reset_index(drop=True)
+# Nino 체크는 최근 2달치만 — CPC bias / rSSTA / RONI / 주간·월간 집계 모두
+# 이 서브셋에서 계산. OISST 캐시는 3개월 유지되지만 분석 대상은 좁힘.
+_two_months_cutoff = df.date.max() - pd.DateOffset(months=2)
+df = df[df.date >= _two_months_cutoff].reset_index(drop=True)
 df['month'] = df.date.dt.month
 df['day']   = df.date.dt.day
 print(f"    -> {len(df)}일 처리 ({df.date.min().date()} ~ {df.date.max().date()})")
@@ -425,9 +429,18 @@ for ax, (key, label, color, ccol) in zip(axes, plot_cfg):
     if ax == axes[0]:
         ax.legend(loc='upper left', fontsize=8, framealpha=0.9, ncol=2)
 
+def _day_or_month(x, pos=None):
+    """X-axis tick formatter: day number on main line; month name below only
+    on the 1st of the month (and on the leftmost tick). Prevents overlap
+    at the ~2-month span."""
+    d = mdates.num2date(x)
+    if d.day == 1 or pos == 0:
+        return f"{d.day}\n{d.strftime('%b')}"
+    return f"{d.day}"
+
 axes[-1].set_xlabel('Date')
-axes[-1].xaxis.set_major_locator(mdates.DayLocator(interval=2))
-axes[-1].xaxis.set_major_formatter(mdates.DateFormatter('%m-%d\n%a'))
+axes[-1].xaxis.set_major_locator(mdates.DayLocator(interval=5))
+axes[-1].xaxis.set_major_formatter(plt.FuncFormatter(_day_or_month))
 fig.suptitle(f'Daily rSSTA (raw, no variance correction) + Weekly averages -- '
              f'updated through {df.date.max().strftime("%Y-%m-%d")}',
              fontsize=12, y=0.995)
@@ -466,8 +479,8 @@ for ax_, val, color in [(axes[0], last.grad_4_minus_12, '#8B4513'),
                  color=color, va='center')
 
 axes[-1].set_xlabel('Date')
-axes[-1].xaxis.set_major_locator(mdates.DayLocator(interval=2))
-axes[-1].xaxis.set_major_formatter(mdates.DateFormatter('%m-%d\n%a'))
+axes[-1].xaxis.set_major_locator(mdates.DayLocator(interval=5))
+axes[-1].xaxis.set_major_formatter(plt.FuncFormatter(_day_or_month))
 fig.suptitle(f'Equatorial Pacific Zonal SST Gradient -- through {df.date.max().strftime("%Y-%m-%d")}',
              fontsize=12, y=0.995)
 plt.tight_layout()
@@ -718,7 +731,7 @@ print(f"    -> {OUT_DIR}/nino_report.md 저장")
 # 1°×1° grid sampled on integer lat/lon points (lat: -10..10, lon: 30..180).
 # Single-snapshot for the most recent date.
 print("[8] Indo-Pacific 격자 SST CSV (최근 1일, ±0.5° 평균)")
-INDO_PACIFIC_LAT = (-10.0, 10.0)
+INDO_PACIFIC_LAT = (-20.0, 20.0)
 INDO_PACIFIC_LON = (30.0, 180.0)
 HALF_BOX = 0.5  # ±0.5° → 1°×1° cell centred on integer lat/lon
 nc_files = sorted(glob.glob(f'{NC_DIR}/oisst-avhrr-v02r01.*.nc'))

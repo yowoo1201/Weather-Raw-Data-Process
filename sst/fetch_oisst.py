@@ -75,9 +75,25 @@ def default_months() -> list[str]:
     return list(reversed(months))
 
 
-def fetch_months(months: list[str]) -> tuple[int, int, int]:
-    """Programmatic entry point. Returns (n_downloaded, n_bytes, n_removed)."""
+def fetch_months(months: list[str], prune: bool = False) -> tuple[int, int, int]:
+    """Programmatic entry point. Returns (n_downloaded, n_bytes, n_removed).
+
+    When ``prune`` is True, any local .nc file whose YYYYMM is NOT in the
+    ``months`` list is deleted. Use for the auto rolling-window default
+    (current + 2 prior months) so stale history doesn't accumulate.
+    """
     LOCAL.mkdir(parents=True, exist_ok=True)
+
+    if prune:
+        months_set = set(months)
+        pruned = 0
+        for p in sorted(LOCAL.glob("oisst-avhrr-v02r01.*.nc")):
+            d = date_from_name(p.name)
+            if d and d[:6] not in months_set:
+                p.unlink()
+                pruned += 1
+        if pruned:
+            print(f"  pruned {pruned} .nc files outside {sorted(months_set)}")
 
     # Local index: {date: [filenames]}
     local_by_date: dict[str, list[str]] = {}
@@ -162,9 +178,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--months", default=",".join(default_months()),
                     help="Comma-separated YYYYMM month dirs to walk")
+    ap.add_argument("--no-prune", action="store_true",
+                    help="Keep .nc files from months outside the walked set "
+                         "(default: prune, so the local mirror stays a rolling "
+                         "current + 2 prior months window)")
     args = ap.parse_args()
     months = [m.strip() for m in args.months.split(",") if m.strip()]
-    fetch_months(months)
+    fetch_months(months, prune=not args.no_prune)
 
 
 if __name__ == "__main__":

@@ -71,7 +71,7 @@ print("[0b] OISST .nc 자동 fetch (current+previous month)")
 try:
     sys.path.insert(0, str(SCRIPT_DIR))
     import fetch_oisst as _fo
-    _fo.fetch_months(_fo.default_months())
+    _fo.fetch_months(_fo.default_months(), prune=True)
 except Exception as _e:
     print(f"    ! OISST fetch skipped ({_e}); using existing local files",
           file=sys.stderr)
